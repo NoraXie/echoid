@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic-settings
+requests
+redis
+asyncpg
+sqlalchemy
+httpx
+psycopg2-binary

@@ -1,0 +1,33 @@
+# Documentation
+PRD.MD
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.env.*
+!.env.example
+!.env.dev.example
+!.env.prod.example
+venv/
+.venv/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Android
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+*.iml
+
+# IDE
+.vscode/
+.idea/
