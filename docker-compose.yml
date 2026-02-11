@@ -4,7 +4,10 @@ services:
   server:
     build: ./server
     container_name: echoid_server
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    # Wait for DB to be ready, then init DB, then start server
+    command: >
+      sh -c "python scripts/init_db.py &&
+             uvicorn main:app --host 0.0.0.0 --port 8000"
     volumes:
       - ./server:/app
     ports:

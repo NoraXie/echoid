@@ -52,7 +52,26 @@ cp .env.prod.example .env
 
 ### 2. Google Cloud Free Tier Deployment Guide / 谷歌云免费层部署指南
 
-To deploy this project on Google Cloud Platform (GCP) "Always Free" tier, follow these specifications to avoid costs (as of 2024):
+To deploy this project on Google Cloud Platform (GCP) "Always Free" tier (e.g., `e2-micro` instance with Debian/Ubuntu), follow these steps.
+
+#### Server Initialization (Debian/Ubuntu)
+New Debian instances might lack common tools. Run these commands first:
+
+```bash
+# 1. Update system and install basic tools
+sudo apt-get update && sudo apt-get install -y git vim curl unzip
+
+# 2. Enable 'll' alias (Optional, for convenience)
+echo "alias ll='ls -l'" >> ~/.bashrc
+source ~/.bashrc
+
+# 3. Install Docker & Docker Compose
+sudo apt-get install -y docker.io docker-compose
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker $USER
+# NOTE: Log out and log back in for docker group changes to take effect!
+```
 
 #### VM Instance (Compute Engine)
 *   **Region**: `us-west1` (Oregon), `us-central1` (Iowa), or `us-east1` (South Carolina).
