@@ -1,8 +1,9 @@
 import asyncio
 import re
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from .config import settings
 from .schemas import InitRequest, InitResponse
@@ -15,6 +16,145 @@ from .database import get_db, SessionLocal
 from .models import Tenant, Log
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+
+# --- Simulation Schema ---
+class SimulationRequest(BaseModel):
+    phone: str
+    token: str
+
+@app.post("/v1/simulate/user-send-message")
+async def simulate_user_send_message(request: SimulationRequest, background_tasks: BackgroundTasks):
+    """
+    Simulation Endpoint for EchoID Demo App.
+    Instead of real WhatsApp -> EchoB -> Webhook,
+    the Demo App calls this to simulate "User sent LOGIN-XXXX to WhatsApp".
+    """
+    # Construct a mock EchoB payload
+    # PRD Payload structure (simplified assumption):
+    # {
+    #   "sender": "52155...", 
+    #   "text": "LOGIN-XXXXX",
+    #   "timestamp": ...
+    # }
+    import time
+    
+    mock_payload = {
+        "sender": request.phone,
+        "text": request.token,
+        "timestamp": int(time.time())
+    }
+    
+    # We can directly call the webhook logic function if we refactor it, 
+    # or just forward the request internally (but FastAPI doesn't easily do internal forwarding).
+    # Better: Extract the core logic of webhook into a function and call it.
+    
+    # However, to keep it simple and reuse existing endpoint, we can use httpx to call localhost
+    # But that adds network overhead. Let's just refactor the webhook logic slightly or
+    # better yet, simply inject the payload into the processing function if we can.
+    
+    # Let's verify if we can just re-use the webhook handler logic.
+    # The webhook handler takes a Request object. We can mock it.
+    
+    # Actually, for a demo, it's cleaner to just have this endpoint call the processing logic directly.
+    # But since the webhook logic is inside `echob_webhook`, let's see its implementation.
+    
+    # Wait, I need to see the implementation of echob_webhook first to extract logic.
+    # For now, let's just make this endpoint receive the request and print it, 
+    # then I'll refactor the webhook to share logic.
+    
+    # Let's assume we will refactor `process_webhook_payload`
+    await process_webhook_payload(mock_payload, background_tasks)
+    
+    return {"status": "simulated", "detail": "Message received and processed"}
+
+async def process_webhook_payload(payload: dict, background_tasks: BackgroundTasks):
+    """
+    Core logic for processing incoming messages (from real Webhook or Simulation).
+    """
+    # Basic Validation (Adapted for internal dict payload)
+    # Simulation payload structure matches EchoB structure?
+    # EchoB payload: {"event": "message", "payload": {"from": "...", "body": "...", "id": "..."}}
+    # Our simulation mock_payload was: {"sender": "...", "text": "...", "timestamp": ...}
+    # Let's unify them or adapt here.
+    
+    # If it's real webhook:
+    event_type = payload.get("event")
+    
+    # If it's simulation (no "event" key or custom structure), we adapt
+    if "sender" in payload and "text" in payload:
+        # Simulation structure adaptation
+        sender = payload["sender"]
+        body = payload["text"]
+        msg_id = f"sim-{payload['timestamp']}"
+    else:
+        # Real Webhook structure
+        if event_type != "message":
+            return {"status": "ignored"}
+        message_data = payload.get("payload", {})
+        body = message_data.get("body", "")
+        sender = message_data.get("from", "") 
+        msg_id = message_data.get("id", "")
+
+    if not body or not sender or not msg_id:
+        return {"status": "ignored"}
+
+    # 1. Idempotency Check
+    if not await acquire_lock(msg_id):
+        return {"status": "ok", "msg": "duplicate"}
+
+    # 2. Token Extraction
+    # Match LOGIN-\d+ (case insensitive)
+    match = re.search(r"(LOGIN-\d+)", body, re.IGNORECASE)
+    if not match:
+        return {"status": "ignored", "msg": "no_token"}
+        
+    token = match.group(1).upper()
+    
+    # 3. Retrieve Session & Tenant Info
+    session_data = await get_session_data(token)
+    if not session_data:
+        # Session expired or invalid
+        return {"status": "ignored", "msg": "session_not_found"}
+        
+    tenant_id = session_data.get("tenant_id")
+    # phone = session_data.get("phone") # Original phone from init
+    
+    print(f"Processing for Tenant: {tenant_id}, Token: {token}")
+
+    # 4. Humanize
+    await echob_client.start_typing("default", sender)
+    await asyncio.sleep(2.5) # Simulate AI thinking
+    await echob_client.stop_typing("default", sender)
+
+    # 5. Prepare Material
+    otp = await generate_otp()
+    # Magic Link: https://[HOST_URL]/jump?t={token}&o={otp}
+    link = f"{settings.HOST_URL}/jump?t={token}&o={otp}"
+    
+    # Get Tenant Name (We need to query DB or cache it. For MVP, query DB or use placeholder if not critical)
+    app_name = "EchoID App" 
+    
+    # 6. Template Assembly
+    template = await get_random_template()
+    final_msg = template.format(app_name=app_name, otp=otp, link=link)
+    print(f"Selected template: {final_msg}")
+
+    # 7. Send Reply
+    await echob_client.send_text("default", sender, final_msg)
+
+    # 8. Billing & Logging (Background Task)
+    if tenant_id:
+        background_tasks.add_task(
+            log_transaction, 
+            tenant_id=tenant_id, 
+            phone=sender, 
+            token=token, 
+            otp=otp, 
+            template=final_msg, 
+            cost=0.05 # Mock cost per transaction
+        )
+    
+    return {"status": "ok"}
 
 # Helper for background task billing
 def log_transaction(tenant_id: int, phone: str, token: str, otp: str, template: str, cost: float):
@@ -100,76 +240,4 @@ async def echob_webhook(request: Request, background_tasks: BackgroundTasks):
     except:
         return {"status": "ignored"}
 
-    # Basic Validation
-    event_type = payload.get("event")
-    if event_type != "message":
-        return {"status": "ignored"}
-        
-    message_data = payload.get("payload", {})
-    body = message_data.get("body", "")
-    sender = message_data.get("from", "") # This is the user's phone number on WhatsApp
-    msg_id = message_data.get("id", "")
-    
-    if not body or not sender or not msg_id:
-        return {"status": "ignored"}
-
-    # 1. Idempotency Check
-    if not await acquire_lock(msg_id):
-        return {"status": "ok", "msg": "duplicate"}
-
-    # 2. Token Extraction
-    # Match LOGIN-\d+ (case insensitive)
-    match = re.search(r"(LOGIN-\d+)", body, re.IGNORECASE)
-    if not match:
-        return {"status": "ignored", "msg": "no_token"}
-        
-    token = match.group(1).upper()
-    
-    # 3. Retrieve Session & Tenant Info
-    session_data = await get_session_data(token)
-    if not session_data:
-        # Session expired or invalid
-        return {"status": "ignored", "msg": "session_not_found"}
-        
-    tenant_id = session_data.get("tenant_id")
-    # phone = session_data.get("phone") # Original phone from init
-    
-    # 4. Humanize
-    await echob_client.start_typing("default", sender)
-    await asyncio.sleep(2.5) # Simulate AI thinking
-    await echob_client.stop_typing("default", sender)
-
-    # 5. Prepare Material
-    otp = await generate_otp()
-    # Magic Link: https://[HOST_URL]/jump?t={token}&o={otp}
-    link = f"{settings.HOST_URL}/jump?t={token}&o={otp}"
-    
-    # Get Tenant Name (We need to query DB or cache it. For MVP, query DB or use placeholder if not critical)
-    # We'll fetch tenant name in background or just use a generic name?
-    # PRD says "Tu código {app_name} es...".
-    # Ideally we should get the app name. Let's do a quick DB lookup here or assume it's "BuenType" for MVP optimization
-    # To do it right:
-    app_name = "EchoID App" 
-    # Optimization: We could store app_name in Redis session too.
-    # For now, let's keep it simple.
-    
-    # 6. Template Assembly
-    template = await get_random_template()
-    final_msg = template.format(app_name=app_name, otp=otp, link=link)
-
-    # 7. Send Reply
-    await echob_client.send_text("default", sender, final_msg)
-
-    # 8. Billing & Logging (Background Task)
-    if tenant_id:
-        background_tasks.add_task(
-            log_transaction, 
-            tenant_id=tenant_id, 
-            phone=sender, 
-            token=token, 
-            otp=otp, 
-            template=final_msg, 
-            cost=0.05 # Mock cost per transaction
-        )
-    
-    return {"status": "ok"}
+    return await process_webhook_payload(payload, background_tasks)
