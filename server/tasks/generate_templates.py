@@ -3,6 +3,8 @@ import httpx
 import redis.asyncio as redis
 import sys
 import os
+import random
+import string
 
 # Allow importing from server package
 sys.path.append("/app")
@@ -21,34 +23,68 @@ except ImportError:
 # Ensure tables exist (for standalone script run)
 Base.metadata.create_all(bind=engine)
 
-REDIS_KEY_TEMPLATES = "templates:es_mx"
+REDIS_KEY_TEMPLATES_DOWNSTREAM = "templates:es_mx"
+REDIS_KEY_TEMPLATES_UPSTREAM = "templates:es_mx:upstream"
 TARGET_COUNT = 20
 
-# --- Prompt Engineering Section ---
-# This system prompt controls the persona and output format of the LLM.
-# Load from external markdown file for easier editing.
-try:
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    prompt_path = os.path.join(current_dir, "copywriter_prompts.md")
-    with open(prompt_path, "r", encoding="utf-8") as f:
-        PROMPT_SYSTEM = f.read()
-except Exception as e:
-    print(f"Error loading prompt file: {e}")
-    sys.exit(1)
+# --- Prompt Loading ---
+def load_prompt(filename):
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        prompt_path = os.path.join(current_dir, filename)
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"Error loading prompt file {filename}: {e}")
+        sys.exit(1)
 
-async def save_to_db(content: str):
-    """Save template to PostgreSQL asynchronously (simulated via sync session in thread)."""
-    # This wrapper is actually problematic if called with run_in_executor(None, lambda: asyncio.run(...))
-    # It's better to make the DB logic purely sync and call it with run_in_executor
-    pass
+PROMPT_REPLY = load_prompt("prompts_reply.md")
+PROMPT_TOKEN = load_prompt("prompts_random_token.md")
 
-def save_to_db_sync(content: str):
+# --- Helper Functions ---
+def generate_secure_token():
+    """
+    Generate Upstream Token:
+    - Length: 6-10 chars
+    - Charset: A-Z (Upper) + 0-9
+    - Exclude: I, L, 1, O, 0
+    - Constraint: At least 4 digits
+    """
+    length = random.choice([6, 7, 8, 9, 10])
+    
+    # Allowed chars (excluding I, L, 1, O, 0)
+    allowed_letters = "ABCDEFGHJKMNPQRSTUVWXYZ" # No I, L, O
+    allowed_digits = "23456789" # No 1, 0
+    
+    while True:
+        # Generate random mix
+        token_chars = []
+        # Ensure at least 4 digits
+        for _ in range(4):
+            token_chars.append(random.choice(allowed_digits))
+            
+        # Fill the rest
+        for _ in range(length - 4):
+            token_chars.append(random.choice(allowed_letters + allowed_digits))
+            
+        random.shuffle(token_chars)
+        token = "".join(token_chars)
+        
+        # Double check constraints (just in case)
+        digit_count = sum(c.isdigit() for c in token)
+        if digit_count >= 4:
+            return token
+
+def save_to_db_sync(content: str, source_type: str):
+    """
+    source_type: 'ai_reply' (Downstream) or 'ai_request' (Upstream)
+    """
     try:
         db = SessionLocal()
         # Check for duplicates
         exists = db.query(Template).filter(Template.content == content).first()
         if not exists:
-            new_template = Template(content=content, language="es_mx", source="ai_generated")
+            new_template = Template(content=content, language="es_mx", source=source_type)
             db.add(new_template)
             db.commit()
             return True
@@ -59,7 +95,10 @@ def save_to_db_sync(content: str):
     finally:
         db.close()
 
-async def generate_single_template(client: httpx.AsyncClient, index: int):
+# --- Generators ---
+
+async def generate_downstream_reply(client: httpx.AsyncClient, index: int):
+    """Downstream Factory: System Reply"""
     # Mock Mode Support
     if settings.NVIDIA_API_KEY.startswith("mock-"):
         import random
@@ -72,9 +111,8 @@ async def generate_single_template(client: httpx.AsyncClient, index: int):
         ]
         return random.choice(templates)
 
-    # User Instruction with Random Seed Injection
     user_instruction = f"Generate variation #{index}. Make this one {'very short' if index%2==0 else 'friendly'}. Use {'Mexican' if index%3==0 else 'Colombian'} slang."
-
+    
     try:
         response = await client.post(
             f"{settings.NVIDIA_BASE_URL}/chat/completions",
@@ -83,12 +121,12 @@ async def generate_single_template(client: httpx.AsyncClient, index: int):
                 "Content-Type": "application/json"
             },
             json={
-                "model": "meta/llama3-70b-instruct", # Optimized for Llama 3 70B
+                "model": settings.NVIDIA_MODEL,
                 "messages": [
-                    {"role": "system", "content": PROMPT_SYSTEM},
+                    {"role": "system", "content": PROMPT_REPLY},
                     {"role": "user", "content": user_instruction}
                 ],
-                "temperature": 0.95, # 🔥 High temperature = High randomness
+                "temperature": 0.95,
                 "top_p": 0.9,
                 "max_tokens": 60
             },
@@ -97,75 +135,94 @@ async def generate_single_template(client: httpx.AsyncClient, index: int):
         response.raise_for_status()
         data = response.json()
         content = data["choices"][0]["message"]["content"].strip()
-        # Remove surrounding quotes if present
-        if content.startswith('"') and content.endswith('"'):
-            content = content[1:-1]
         return content
     except Exception as e:
-        print(f"Error generating template: {e}")
+        print(f"Downstream Gen Error: {e}")
         return None
 
-def validate_template(text: str) -> bool:
-    if not text:
-        return False
-    required = ["{app_name}", "{otp}", "{link}"]
-    for req in required:
-        if req not in text:
-            return False
-    return True
+async def generate_upstream_request(client: httpx.AsyncClient, index: int):
+    """Upstream Factory: User Request"""
+    token = generate_secure_token()
+    
+    # Mock Mode Support
+    if settings.NVIDIA_API_KEY.startswith("mock-"):
+        templates = [
+            f"Hola, mi código es {token}",
+            f"Aquí está el código: {token}",
+            f"Verifícame con {token}",
+            f"{token}",
+            f"Ya tengo el código {token}, gracias"
+        ]
+        return random.choice(templates)
+
+    user_instruction = f"Generate variation #{index}. The token is {token}."
+    
+    try:
+        response = await client.post(
+            f"{settings.NVIDIA_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {settings.NVIDIA_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": settings.NVIDIA_MODEL,
+                "messages": [
+                    {"role": "system", "content": PROMPT_TOKEN},
+                    {"role": "user", "content": user_instruction}
+                ],
+                "temperature": 0.9,
+                "max_tokens": 40
+            },
+            timeout=10.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        # Ensure token is preserved exactly (LLM might mess it up slightly, though unlikely with instructions)
+        if token not in content:
+            # Fallback if token lost: just append it
+            content = f"{content} {token}"
+        return content
+    except Exception as e:
+        print(f"Upstream Gen Error: {e}")
+        return None
 
 async def main():
-    print(f"Starting Offline Template Factory...")
-    print(f"Target: {TARGET_COUNT} new templates")
+    print("🚀 Starting Template Factory...")
+    redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
     
-    # Use Redis URL from settings which already includes password if set
-    redis_client = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
-    
-    # Test Redis Connection
-    try:
-        await redis_client.ping()
-        print("Redis connection successful.")
-    except Exception as e:
-        print(f"Redis connection failed: {e}")
-        return
-
     async with httpx.AsyncClient() as client:
-        generated = 0
-        attempts = 0
-        
-        while generated < TARGET_COUNT and attempts < TARGET_COUNT * 2:
-            attempts += 1
-            # Generate Template
-            text = await generate_single_template(client, attempts)
-            
-            # Validate Format
-            if validate_template(text):
-                # 1. Save to Redis (for high-speed random access)
-                redis_added = await redis_client.sadd(REDIS_KEY_TEMPLATES, text)
-                
-                # 2. Save to Postgres (for persistence/audit)
-                # We run this even if Redis has it, to ensure DB is consistent
-                # Using run_in_executor to avoid blocking async loop with sync DB calls
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, save_to_db_sync, text)
-                
-                if redis_added > 0:
-                    generated += 1
-                    print(f"[{generated}/{TARGET_COUNT}] Saved to Redis & DB: {text[:50]}...")
+        # 1. Generate Downstream (Replies)
+        print("\n--- Generating Downstream Replies (System -> User) ---")
+        count_down = 0
+        for i in range(TARGET_COUNT):
+            content = await generate_downstream_reply(client, i)
+            if content:
+                # Save to Redis (List)
+                await redis_client.rpush(REDIS_KEY_TEMPLATES_DOWNSTREAM, content)
+                # Save to DB
+                if save_to_db_sync(content, "ai_reply"):
+                    print(f"✅ [Downstream] Saved: {content[:30]}...")
+                    count_down += 1
                 else:
-                    print(f"Duplicate in Redis (skipped).")
-            else:
-                print(f"Invalid format or generation failed.")
-                
-    total = await redis_client.scard(REDIS_KEY_TEMPLATES)
-    print(f"Job Complete. Total templates in Redis: {total}")
-    
-    # Verify by reading back 3 random templates
-    print("\n--- Verification: Random 3 Templates from Redis ---")
-    samples = await redis_client.srandmember(REDIS_KEY_TEMPLATES, 3)
-    for i, s in enumerate(samples, 1):
-        print(f"{i}. {s}")
+                    print(f"⚠️ [Downstream] Duplicate/Error")
         
+        # 2. Generate Upstream (Requests)
+        print("\n--- Generating Upstream Requests (User -> System) ---")
+        count_up = 0
+        for i in range(TARGET_COUNT):
+            content = await generate_upstream_request(client, i)
+            if content:
+                # Save to Redis (List)
+                await redis_client.rpush(REDIS_KEY_TEMPLATES_UPSTREAM, content)
+                # Save to DB
+                if save_to_db_sync(content, "ai_request"):
+                    print(f"✅ [Upstream] Saved: {content[:30]}...")
+                    count_up += 1
+                else:
+                    print(f"⚠️ [Upstream] Duplicate/Error")
+
+    print(f"\n🎉 Done! Downstream: {count_down}, Upstream: {count_up}")
     await redis_client.aclose()
 
 if __name__ == "__main__":
