@@ -14,7 +14,7 @@ services:
       - "8000:8000"
     environment:
       - PYTHONPATH=/app
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=${TZ:-America/Mexico_City}
     env_file:
       - .env
     depends_on:
@@ -33,7 +33,7 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secure_password}
       - POSTGRES_DB=echoid
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=${TZ:-America/Mexico_City}
     ports:
       - "5432:5432"
     restart: always
@@ -46,7 +46,7 @@ services:
     ports:
       - "6379:6379"
     environment:
-      - TZ=${TZ:-Asia/Shanghai}
+      - TZ=${TZ:-America/Mexico_City}
     restart: always
     networks:
       - echoid_net
