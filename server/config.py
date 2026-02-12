@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # AI / Offline Factory Configuration
     # Optional: Only required for running offline template generation scripts
     NVIDIA_API_KEY: str = Field("mock-key", description="NVIDIA NIM API Key for template generation")
+    NVIDIA_BASE_URL: str = Field("https://integrate.api.nvidia.com/v1", description="NVIDIA NIM Base URL")
+    NVIDIA_MODEL: str = Field("meta/llama3-70b-instruct", description="Model name to use")
 
     # Database & Redis
     DATABASE_URL: str = Field("postgresql://user:password@localhost:5432/echoid", description="数据库连接串")
