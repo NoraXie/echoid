@@ -1,5 +1,5 @@
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     # Project Info
@@ -27,8 +27,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field("postgresql://user:password@localhost:5432/echoid", description="数据库连接串")
     REDIS_URL: str = Field("redis://localhost:6379/0", description="Redis 连接串")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=True,
+        extra="ignore"
+    )
 
 settings = Settings()
