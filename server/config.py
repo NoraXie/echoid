@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     ECHOB_API_KEY: str = Field(..., description="ECHOB 服务的 API Key")
     
     # AI / Offline Factory Configuration
-    NVIDIA_API_KEY: str = Field(..., description="NVIDIA NIM API Key for template generation")
+    # Optional: Only required for running offline template generation scripts
+    NVIDIA_API_KEY: str = Field("mock-key", description="NVIDIA NIM API Key for template generation")
 
     # Database & Redis
     DATABASE_URL: str = Field("postgresql://user:password@localhost:5432/echoid", description="数据库连接串")
