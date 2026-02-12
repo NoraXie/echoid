@@ -25,3 +25,14 @@ class Log(Base):
     template_snapshot = Column(String) # Record the actual message sent
     cost = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class Template(Base):
+    __tablename__ = "templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content = Column(String, unique=True, nullable=False)
+    language = Column(String, default="es_mx") # e.g., es_mx, en_us
+    category = Column(String, default="otp")   # e.g., otp, promo
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    source = Column(String, default="ai_generated") # ai_generated, manual

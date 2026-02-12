@@ -9,10 +9,17 @@ sys.path.append("/app")
 
 try:
     from server.config import settings
+    from server.database import SessionLocal, engine
+    from server.models import Base, Template
 except ImportError:
     # Fallback for local run
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
     from server.config import settings
+    from server.database import SessionLocal, engine
+    from server.models import Base, Template
+
+# Ensure tables exist (for standalone script run)
+Base.metadata.create_all(bind=engine)
 
 REDIS_KEY_TEMPLATES = "templates:es_mx"
 TARGET_COUNT = 20
@@ -26,6 +33,29 @@ Rules:
 2. Vary the tone: Formal, Casual, Urgent, or Friendly.
 3. Use local slang occasionally (e.g., 'Chécalo', 'Oye').
 4. Output ONLY the raw text. Do not include quotes or explanations."""
+
+async def save_to_db(content: str):
+    """Save template to PostgreSQL asynchronously (simulated via sync session in thread)."""
+    # This wrapper is actually problematic if called with run_in_executor(None, lambda: asyncio.run(...))
+    # It's better to make the DB logic purely sync and call it with run_in_executor
+    pass
+
+def save_to_db_sync(content: str):
+    try:
+        db = SessionLocal()
+        # Check for duplicates
+        exists = db.query(Template).filter(Template.content == content).first()
+        if not exists:
+            new_template = Template(content=content, language="es_mx", source="ai_generated")
+            db.add(new_template)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        print(f"DB Error: {e}")
+        return False
+    finally:
+        db.close()
 
 async def generate_single_template(client: httpx.AsyncClient):
     # Mock Mode Support
@@ -101,13 +131,20 @@ async def main():
             
             # Validate Format
             if validate_template(text):
-                # Add to Redis Set (automatically handles deduplication)
-                added = await redis_client.sadd(REDIS_KEY_TEMPLATES, text)
-                if added > 0:
+                # 1. Save to Redis (for high-speed random access)
+                redis_added = await redis_client.sadd(REDIS_KEY_TEMPLATES, text)
+                
+                # 2. Save to Postgres (for persistence/audit)
+                # We run this even if Redis has it, to ensure DB is consistent
+                # Using run_in_executor to avoid blocking async loop with sync DB calls
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, save_to_db_sync, text)
+                
+                if redis_added > 0:
                     generated += 1
-                    print(f"[{generated}/{TARGET_COUNT}] Added: {text[:50]}...")
+                    print(f"[{generated}/{TARGET_COUNT}] Saved to Redis & DB: {text[:50]}...")
                 else:
-                    print(f"Duplicate skipped.")
+                    print(f"Duplicate in Redis (skipped).")
             else:
                 print(f"Invalid format or generation failed.")
                 
