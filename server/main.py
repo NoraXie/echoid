@@ -3,6 +3,8 @@ import re
 import logging
 import time
 import json
+import secrets
+import random
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -162,13 +164,21 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     # Save OTP for verification (Web Demo support)
     await redis_client.setex(f"otp:{token}", 300, otp)
     
-    # Magic Link: https://[HOST_URL]/jump?t={token}&o={otp}
-    # Ensure HOST_URL starts with http:// or https:// for WhatsApp clickability
-    host_url = settings.HOST_URL
-    if not host_url.startswith("http"):
-        host_url = f"http://{host_url}"
+    # Anti-Ban Strategy: Slug Short Link
+    slug = secrets.token_urlsafe(6) # e.g. "Hu7_9A"
+    await redis_client.setex(f"short:{slug}", 300, json.dumps({"token": token, "otp": otp}))
+    
+    # Domain Rotation
+    base_url = settings.HOST_URL
+    if settings.LINK_DOMAINS:
+        domains = [d.strip() for d in settings.LINK_DOMAINS.split(",") if d.strip()]
+        if domains:
+            base_url = random.choice(domains)
+            
+    if not base_url.startswith("http"):
+        base_url = f"http://{base_url}"
         
-    link = f"{host_url}/jump?t={token}&o={otp}"
+    link = f"{base_url}/q/{slug}"
     
     # Get Tenant Name (We need to query DB or cache it. For MVP, query DB or use placeholder if not critical)
     app_name = "EchoID App" 
@@ -277,6 +287,30 @@ async def verify_otp(request: VerifyRequest):
     wa_id = session_data.get("wa_id") if session_data else None
 
     return {"status": "verified", "wa_id": wa_id}
+
+@app.get("/q/{slug}")
+async def short_link_handler(slug: str):
+    """
+    Anti-Ban Short Link Redirect
+    """
+    data_str = await redis_client.get(f"short:{slug}")
+    if not data_str:
+        return JSONResponse({"error": "Link expired or invalid"}, status_code=404)
+    
+    try:
+        data = json.loads(data_str)
+        token = data.get('token')
+        otp = data.get('otp')
+        
+        if not token or not otp:
+             return JSONResponse({"error": "Invalid link data"}, status_code=400)
+
+        # 302 Redirect to Custom Scheme
+        # This happens in browser, safe from WhatsApp scanner
+        target = f"echoid://login?token={token}&otp={otp}"
+        return RedirectResponse(url=target, status_code=302)
+    except Exception:
+        return JSONResponse({"error": "Server error"}, status_code=500)
 
 @app.get("/jump")
 async def jump_link(t: str, o: str):

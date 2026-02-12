@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     ECHOB_API_URL: str = Field(..., description="ECHOB 服务的 API 地址")
     ECHOB_API_KEY: str = Field(..., description="ECHOB 服务的 API Key")
     
+    # Anti-Ban Link Strategy
+    LINK_DOMAINS: str = Field(None, description="Comma separated list of domains for link rotation (e.g. https://d1.com,https://d2.com)")
+
     # AI / Offline Factory Configuration
     # Optional: Only required for running offline template generation scripts
     NVIDIA_API_KEY: str = Field("mock-key", description="NVIDIA NIM API Key for template generation")
