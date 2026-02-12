@@ -115,6 +115,7 @@ To update the server with the latest code:
 git pull origin main
 
 # 2. Rebuild and restart containers (Minimal downtime)
+# This will pick up changes in code, install new requirements, and run init_db
 docker-compose up -d --build --remove-orphans
 ```
 

@@ -7,14 +7,17 @@ from sqlalchemy.exc import OperationalError
 # In Docker, WORKDIR is /app, so adding /app to sys.path
 sys.path.append("/app")
 
-# Also try to append parent if running locally
-current_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(current_dir))
-sys.path.append(project_root)
-sys.path.append(os.path.join(project_root, "echoid"))
-
-from server.database import engine, SessionLocal
-from server.models import Base, Tenant
+try:
+    # Try importing as if we are outside (module style)
+    from server.database import engine, SessionLocal
+    from server.models import Base, Tenant
+except ImportError:
+    # Fallback: if we are inside /app and running script directly, 
+    # 'server' package might not be resolved if /app is root.
+    # We should try importing directly from local modules
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from database import engine, SessionLocal
+    from models import Base, Tenant
 
 def wait_for_db():
     retries = 30

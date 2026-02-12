@@ -12,6 +12,8 @@ services:
       - ./server:/app
     ports:
       - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
