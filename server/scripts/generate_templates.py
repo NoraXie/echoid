@@ -158,41 +158,74 @@ async def generate_upstream_request(client: httpx.AsyncClient, index: int):
 
 async def main():
     print("🚀 Starting Template Factory...")
-    redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
-    
-    async with httpx.AsyncClient() as client:
-        # 1. Generate Downstream (Replies)
-        print("\n--- Generating Downstream Replies (System -> User) ---")
-        count_down = 0
-        for i in range(TARGET_COUNT):
-            content = await generate_downstream_reply(client, i)
-            if content:
-                # Save to Redis (List)
-                await redis_client.rpush(REDIS_KEY_TEMPLATES_DOWNSTREAM, content)
-                # Save to DB
-                if save_to_db_sync(content, "ai_reply"):
-                    print(f"✅ [Downstream] Saved: {content[:30]}...")
-                    count_down += 1
-                else:
-                    print(f"⚠️ [Downstream] Duplicate/Error")
-        
-        # 2. Generate Upstream (Requests)
-        print("\n--- Generating Upstream Requests (User -> System) ---")
-        count_up = 0
-        for i in range(TARGET_COUNT):
-            content = await generate_upstream_request(client, i)
-            if content:
-                # Save to Redis (List)
-                await redis_client.rpush(REDIS_KEY_TEMPLATES_UPSTREAM, content)
-                # Save to DB
-                if save_to_db_sync(content, "ai_request"):
-                    print(f"✅ [Upstream] Saved: {content[:30]}...")
-                    count_up += 1
-                else:
-                    print(f"⚠️ [Upstream] Duplicate/Error")
+    print(f"Connecting to Redis at {settings.REDIS_URL}...")
+    redis_client = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
 
-    print(f"\n🎉 Done! Downstream: {count_down}, Upstream: {count_up}")
-    await redis_client.aclose()
+    try:
+        # Check if the key exists and if it is of the correct type (Set)
+        key_type = await redis_client.type(REDIS_KEY_TEMPLATES_DOWNSTREAM)
+        if key_type == "list":
+             print(f"Warning: Key {REDIS_KEY_TEMPLATES_DOWNSTREAM} is a List. Deleting it to create a Set.")
+             await redis_client.delete(REDIS_KEY_TEMPLATES_DOWNSTREAM)
+        elif key_type != "none" and key_type != "set":
+             print(f"Error: Key {REDIS_KEY_TEMPLATES_DOWNSTREAM} is of type {key_type}. Expected Set or None.")
+             # Depending on your requirement, you might want to delete it or exit
+             # For now, let's delete it to self-heal
+             print(f"Self-healing: Deleting incorrect key type...")
+             await redis_client.delete(REDIS_KEY_TEMPLATES_DOWNSTREAM)
+
+        async with httpx.AsyncClient() as client:
+            # 1. Generate Downstream (Replies)
+            print("\n--- Generating Downstream Replies (System -> User) ---")
+            count_down = 0
+            tasks = [generate_downstream_reply(client, i) for i in range(TARGET_COUNT)]
+            results = await asyncio.gather(*tasks)
+
+            for content in results:
+                if content:
+                    # Save to Redis (Set)
+                    # SADD returns 1 if added, 0 if duplicate
+                    if await redis_client.sadd(REDIS_KEY_TEMPLATES_DOWNSTREAM, content):
+                        # Save to DB
+                        if save_to_db_sync(content, "ai_reply"):
+                            print(f"✅ [Downstream] Saved: {content[:30]}...")
+                            count_down += 1
+                        else:
+                            print(f"⚠️ [Downstream] DB Duplicate")
+                    else:
+                         print(f"⚠️ [Downstream] Redis Duplicate")
+
+            # 2. Generate Upstream (Requests)
+            # Upstream templates (User messages) can probably stay as a list or also become a set
+            # Let's keep them as list for now or convert to set if uniqueness is desired
+            # But the error was specifically about WRONGTYPE on rpush vs set
+            # Assuming upstream logic uses RPUSH, let's check its key type too
+            
+            key_type_up = await redis_client.type(REDIS_KEY_TEMPLATES_UPSTREAM)
+            if key_type_up == "set": # If we want list but it is set
+                 print(f"Warning: Key {REDIS_KEY_TEMPLATES_UPSTREAM} is a Set. Deleting it to create a List.")
+                 await redis_client.delete(REDIS_KEY_TEMPLATES_UPSTREAM)
+
+            print("\n--- Generating Upstream Requests (User -> System) ---")
+            count_up = 0
+            tasks_up = [generate_upstream_request(client, i) for i in range(TARGET_COUNT)]
+            results_up = await asyncio.gather(*tasks_up)
+            
+            for content in results_up:
+                if content:
+                    # Save to Redis (List)
+                    await redis_client.rpush(REDIS_KEY_TEMPLATES_UPSTREAM, content)
+                    # Save to DB
+                    if save_to_db_sync(content, "ai_request"):
+                        print(f"✅ [Upstream] Saved: {content[:30]}...")
+                        count_up += 1
+                    else:
+                        print(f"⚠️ [Upstream] Duplicate/Error")
+
+        print(f"\n🎉 Done! Downstream: {count_down}, Upstream: {count_up}")
+    
+    finally:
+        await redis_client.aclose()
 
 if __name__ == "__main__":
     asyncio.run(main())
