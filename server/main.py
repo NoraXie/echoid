@@ -1,5 +1,6 @@
 import asyncio
 import re
+import logging
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -15,7 +16,18 @@ from .echob_client import echob_client
 from .database import get_db, SessionLocal
 from .models import Tenant, Log
 
+# Configure Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("echoid")
+
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+
+@app.get("/")
+async def root():
+    return {"message": "EchoID Server is running", "version": settings.VERSION}
 
 # --- Simulation Schema ---
 class SimulationRequest(BaseModel):
@@ -119,7 +131,7 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     tenant_id = session_data.get("tenant_id")
     # phone = session_data.get("phone") # Original phone from init
     
-    print(f"Processing for Tenant: {tenant_id}, Token: {token}")
+    logger.info(f"Processing for Tenant: {tenant_id}, Token: {token}")
 
     # 4. Humanize
     await echob_client.start_typing("default", sender)
@@ -137,7 +149,7 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     # 6. Template Assembly
     template = await get_random_template()
     final_msg = template.format(app_name=app_name, otp=otp, link=link)
-    print(f"Selected template: {final_msg}")
+    logger.info(f"Selected template: {final_msg}")
 
     # 7. Send Reply
     await echob_client.send_text("default", sender, final_msg)
@@ -177,7 +189,7 @@ def log_transaction(tenant_id: int, phone: str, token: str, otp: str, template: 
         db.add(log_entry)
         db.commit()
     except Exception as e:
-        print(f"Error in billing: {e}")
+        logger.error(f"Error in billing: {e}")
         db.rollback()
     finally:
         db.close()
