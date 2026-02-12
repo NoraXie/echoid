@@ -17,7 +17,7 @@ services:
       - .env
     environment:
       - PYTHONPATH=/app
-      - DATABASE_URL=postgresql://postgres:postgres@db:5432/echoid
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-secure_password}@db:5432/echoid
       - REDIS_URL=redis://:${REDIS_PASSWORD:-secure_redis_password}@redis:6379/0
       - ECHOB_API_URL=${ECHOB_API_URL}
       - ECHOB_API_KEY=${ECHOB_API_KEY}
