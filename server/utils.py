@@ -7,8 +7,40 @@ from .config import settings
 # Initialize Redis client
 redis_client = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
 
-async def generate_token(length=16):
-    return "LOGIN-" + ''.join(random.choices(string.digits, k=6)) # PRD format: LOGIN-829101 (6 digits for lower collision)
+async def generate_token(length=None):
+    """
+    Generate Secure Token:
+    - Length: 6-10 chars (randomly selected if not specified)
+    - Charset: A-Z (Upper) + 0-9
+    - Exclude: I, L, 1, O, 0
+    - Constraint: At least 4 digits
+    """
+    if length is None:
+        length = random.choice([6, 7, 8, 9, 10])
+    
+    # Allowed chars (excluding I, L, 1, O, 0)
+    allowed_letters = "ABCDEFGHJKMNPQRSTUVWXYZ" # No I, L, O
+    allowed_digits = "23456789" # No 1, 0
+    
+    while True:
+        # Generate random mix
+        token_chars = []
+        # Ensure at least 4 digits
+        for _ in range(4):
+            token_chars.append(random.choice(allowed_digits))
+            
+        # Fill the rest
+        if length > 4:
+            for _ in range(length - 4):
+                token_chars.append(random.choice(allowed_letters + allowed_digits))
+            
+        random.shuffle(token_chars)
+        token = "".join(token_chars)
+        
+        # Double check constraints (just in case)
+        digit_count = sum(c.isdigit() for c in token)
+        if digit_count >= 4:
+            return token
 
 async def generate_otp(length=4):
     return ''.join(random.choices(string.digits, k=length))

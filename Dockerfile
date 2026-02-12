@@ -6,11 +6,11 @@ WORKDIR /app
 # tzdata is needed for timezone configuration
 RUN apt-get update && apt-get install -y tzdata && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code into a package structure
-COPY . ./server
+# Copy entire project (server, tests, docs, etc.)
+COPY . .
 
 # Expose port 8000
 EXPOSE 8000

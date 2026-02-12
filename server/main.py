@@ -132,8 +132,9 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
         return {"status": "ok", "msg": "duplicate"}
 
     # 2. Token Extraction
-    # Match LOGIN-\d+ (case insensitive)
-    match = re.search(r"(LOGIN-\d+)", body, re.IGNORECASE)
+    # Match Secure Token: 6-10 chars, Upper alphanumeric, no I,L,O,0,1
+    # Regex class: [A-HJ-KMNP-Z2-9]
+    match = re.search(r"\b([A-HJ-KMNP-Z2-9]{6,10})\b", body, re.IGNORECASE)
     if not match:
         return {"status": "ignored", "msg": "no_token"}
         

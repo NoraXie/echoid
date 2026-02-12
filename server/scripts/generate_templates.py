@@ -13,12 +13,14 @@ try:
     from server.config import settings
     from server.database import SessionLocal, engine
     from server.models import Base, Template
+    from server.utils import generate_token
 except ImportError:
     # Fallback for local run
     sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
     from server.config import settings
     from server.database import SessionLocal, engine
     from server.models import Base, Template
+    from server.utils import generate_token
 
 # Ensure tables exist (for standalone script run)
 Base.metadata.create_all(bind=engine)
@@ -42,39 +44,6 @@ PROMPT_REPLY = load_prompt("prompts_reply.md")
 PROMPT_TOKEN = load_prompt("prompts_random_token.md")
 
 # --- Helper Functions ---
-def generate_secure_token():
-    """
-    Generate Upstream Token:
-    - Length: 6-10 chars
-    - Charset: A-Z (Upper) + 0-9
-    - Exclude: I, L, 1, O, 0
-    - Constraint: At least 4 digits
-    """
-    length = random.choice([6, 7, 8, 9, 10])
-    
-    # Allowed chars (excluding I, L, 1, O, 0)
-    allowed_letters = "ABCDEFGHJKMNPQRSTUVWXYZ" # No I, L, O
-    allowed_digits = "23456789" # No 1, 0
-    
-    while True:
-        # Generate random mix
-        token_chars = []
-        # Ensure at least 4 digits
-        for _ in range(4):
-            token_chars.append(random.choice(allowed_digits))
-            
-        # Fill the rest
-        for _ in range(length - 4):
-            token_chars.append(random.choice(allowed_letters + allowed_digits))
-            
-        random.shuffle(token_chars)
-        token = "".join(token_chars)
-        
-        # Double check constraints (just in case)
-        digit_count = sum(c.isdigit() for c in token)
-        if digit_count >= 4:
-            return token
-
 def save_to_db_sync(content: str, source_type: str):
     """
     source_type: 'ai_reply' (Downstream) or 'ai_request' (Upstream)
@@ -142,7 +111,7 @@ async def generate_downstream_reply(client: httpx.AsyncClient, index: int):
 
 async def generate_upstream_request(client: httpx.AsyncClient, index: int):
     """Upstream Factory: User Request"""
-    token = generate_secure_token()
+    token = await generate_token()
     
     # Mock Mode Support
     if settings.NVIDIA_API_KEY.startswith("mock-"):

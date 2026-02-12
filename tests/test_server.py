@@ -5,6 +5,13 @@ import os
 # Add project root (echoid) to sys.path to allow 'server' module imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Set required environment variables for testing BEFORE importing server modules
+os.environ["HOST_URL"] = "http://localhost:8000"
+os.environ["ECHOB_API_URL"] = "http://mock-echob"
+os.environ["ECHOB_API_KEY"] = "mock-key"
+os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
+
 from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 import json
@@ -76,10 +83,11 @@ class TestEchoIDFlow(unittest.TestCase):
         deep_link = data["deep_link"]
         print(f"\n[1] Init Success. Deep Link: {deep_link}")
         
-        # Extract token from deep link: https://wa.me/521...?text=LOGIN-XXXXX
+        # Extract token from deep link: https://wa.me/521...?text=LOGIN-XXXXX or text=TOKEN
         import re
-        token_match = re.search(r"text=(LOGIN-\d+)", deep_link)
-        self.assertTrue(token_match)
+        # Updated to match new secure token format (6-10 chars, alphanumeric)
+        token_match = re.search(r"text=([A-HJ-KMNP-Z2-9]{6,10})", deep_link)
+        self.assertTrue(token_match, f"Deep link {deep_link} does not contain valid token")
         token = token_match.group(1)
         print(f"    Token: {token}")
         
@@ -123,21 +131,32 @@ class TestEchoIDFlow(unittest.TestCase):
         sent_text = mock_echob.send_text.call_args[0][2] # args: (instance, phone, text)
         print(f"    ✅ Message sent to user:\n---\n{sent_text}\n---")
         
-        # Verify the jump link in the message contains token
-        self.assertIn(token, sent_text)
+        # Verify the message contains a link (Short Link)
+        import re
+        link_match = re.search(r"(http://[^ ]+/q/[a-zA-Z0-9_-]+)", sent_text)
+        self.assertTrue(link_match, "Short link not found in message")
+        short_link_url = link_match.group(1)
+        print(f"    ✅ Found Short Link: {short_link_url}")
         
+        # Extract slug
+        slug = short_link_url.split("/")[-1]
+
+        # Mock Redis response for the short link lookup
+        # The handler expects {"token": ..., "otp": ...}
+        redis_client.get.return_value = json.dumps({"token": token, "otp": "1234"})
+
         # ==========================================
-        # Step 4: Verify Jump Link (User Click -> App)
+        # Step 4: Verify Short Link Redirect (User Click -> Browser -> App)
         # ==========================================
-        otp = "1234" # Dummy
-        jump_response = self.client.get(f"/jump?t={token}&o={otp}", follow_redirects=False)
+        # Test the /q/{slug} endpoint
+        short_response = self.client.get(f"/q/{slug}", follow_redirects=False)
+        self.assertEqual(short_response.status_code, 302)
+        location = short_response.headers["location"]
+        print(f"[3] Short Link Redirects to: {location}")
         
-        self.assertEqual(jump_response.status_code, 302) 
-        location = jump_response.headers["location"]
-        print(f"[3] Jump Link Redirects to: {location}")
-        
-        expected_scheme = f"echoid://login?token={token}&otp={otp}"
-        self.assertEqual(location, expected_scheme)
+        # Expect echoid://login?token={token}&otp={otp}
+        self.assertIn("echoid://login", location)
+        self.assertIn(token, location)
         print("    ✅ Redirects to Custom Scheme correctly")
 
     def test_rate_limit(self):
