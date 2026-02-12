@@ -21,6 +21,7 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD:-secure_redis_password}@redis:6379/0
       - ECHOB_API_URL=${ECHOB_API_URL}
       - ECHOB_API_KEY=${ECHOB_API_KEY}
+      - TZ=${TZ:-America/Mexico_City}
     depends_on:
       - db
       - redis
@@ -37,7 +38,6 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-secure_password}
       - POSTGRES_DB=echoid
-      - TZ=${TZ:-America/Mexico_City}
     ports:
       - "5432:5432"
     restart: always
