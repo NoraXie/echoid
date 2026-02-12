@@ -1,0 +1,45 @@
+import asyncio
+import sys
+import os
+import redis.asyncio as redis
+
+# Allow importing from server package
+sys.path.append("/app")
+
+try:
+    from server.config import settings
+except ImportError:
+    # Fallback for local run
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+    from server.config import settings
+
+REDIS_KEY_TEMPLATES = "templates:es_mx"
+
+async def clear_templates():
+    print(f"Connecting to Redis at {settings.REDIS_URL}...")
+    redis_client = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
+    
+    try:
+        # Check if key exists
+        count = await redis_client.scard(REDIS_KEY_TEMPLATES)
+        if count == 0:
+            print(f"No templates found in '{REDIS_KEY_TEMPLATES}'. Nothing to delete.")
+        else:
+            print(f"Found {count} templates. Deleting...")
+            await redis_client.delete(REDIS_KEY_TEMPLATES)
+            print(f"Successfully deleted key: {REDIS_KEY_TEMPLATES}")
+            
+        # Verify
+        exists = await redis_client.exists(REDIS_KEY_TEMPLATES)
+        if not exists:
+            print("Verification passed: Key is gone.")
+        else:
+            print("Warning: Key still exists!")
+            
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await redis_client.aclose()
+
+if __name__ == "__main__":
+    asyncio.run(clear_templates())
