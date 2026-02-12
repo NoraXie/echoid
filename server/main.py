@@ -1,10 +1,20 @@
 import asyncio
 import re
 import logging
+import time
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+
+# Configure Logging with UTC/Local Time fix
+logging.Formatter.converter = time.localtime
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger("echoid")
 
 from .config import settings
 from .schemas import InitRequest, InitResponse
@@ -15,13 +25,6 @@ from .utils import (
 from .echob_client import echob_client
 from .database import get_db, SessionLocal
 from .models import Tenant, Log
-
-# Configure Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("echoid")
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
 
