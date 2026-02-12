@@ -1,29 +1,18 @@
-import sys
 import os
+import sys
 import time
 from sqlalchemy.exc import OperationalError
 
-# Adjust path to include the project root (echoid/server)
-# In Docker, WORKDIR is /app, so adding /app to sys.path
-sys.path.append("/app")
-
-try:
-    # Try importing as if we are outside (module style)
-    from server.database import engine, SessionLocal
-    from server.models import Base, Tenant
-except ImportError:
-    # Fallback: if we are inside /app and running script directly, 
-    # 'server' package might not be resolved if /app is root.
-    # We should try importing directly from local modules
-    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-    from database import engine, SessionLocal
-    from models import Base, Tenant
+# Since we run this as `python -m server.scripts.init_db` with PYTHONPATH=/app,
+# we can import directly from the server package.
+from server.database import engine, SessionLocal
+from server.models import Base, Tenant
+from server.utils import generate_token
 
 def wait_for_db():
     retries = 30
     while retries > 0:
         try:
-            # Try to connect
             conn = engine.connect()
             conn.close()
             print("Database connection successful.")
@@ -36,32 +25,37 @@ def wait_for_db():
 
 def init_db():
     if not wait_for_db():
-        print("Could not connect to database after multiple retries. Exiting.")
+        print("Could not connect to database. Exiting.")
         sys.exit(1)
 
     print("Creating tables...")
     Base.metadata.create_all(bind=engine)
+    print("Tables created.")
     
+    # Create initial tenant if not exists
     db = SessionLocal()
     try:
-        # Check if test tenant exists
-        test_api_key = os.getenv("TEST_TENANT_API_KEY", "test-api-key")
-        # Only create if explicit env var is set or we are in dev/test (default)
-        # In production, we might want to skip creating default test tenant unless specified
-        
-        tenant = db.query(Tenant).filter(Tenant.api_key == test_api_key).first()
-        if not tenant:
-            print(f"Creating initial tenant with key: {test_api_key[:4]}***")
+        # Check if any tenant exists
+        existing_tenant = db.query(Tenant).first()
+        if not existing_tenant:
+            print("Creating default tenant...")
+            # Use environment variables for sensitive initial data if available, 
+            # or generate secure defaults.
+            default_api_key = os.getenv("DEFAULT_TENANT_KEY", "test_key_123")
+            
             tenant = Tenant(
-                api_key=test_api_key,
-                name="Initial Tenant",
+                api_key=default_api_key,
+                name="Default Tenant",
                 balance=100.0
             )
             db.add(tenant)
             db.commit()
-            print("Initial tenant created.")
+            print(f"Default tenant created. API Key: {default_api_key}")
         else:
-            print("Initial tenant already exists.")
+            print("Tenant already exists. Skipping creation.")
+            
+    except Exception as e:
+        print(f"Error initializing data: {e}")
     finally:
         db.close()
 

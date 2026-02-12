@@ -6,10 +6,10 @@ services:
     container_name: echoid_server
     # Wait for DB to be ready, then init DB, then start server
     command: >
-      sh -c "python scripts/init_db.py &&
-             uvicorn main:app --host 0.0.0.0 --port 8000"
+      sh -c "python -m server.scripts.init_db &&
+             uvicorn server.main:app --host 0.0.0.0 --port 8000"
     volumes:
-      - ./server:/app
+      - ./server:/app/server
     ports:
       - "8000:8000"
     environment:
