@@ -31,3 +31,6 @@ venv/
 # IDE
 .vscode/
 .idea/
+
+# Web Demo
+web_demo/

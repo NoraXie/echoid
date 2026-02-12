@@ -20,7 +20,8 @@ from .config import settings
 from .schemas import InitRequest, InitResponse
 from .utils import (
     generate_token, generate_otp, save_verification_session, 
-    get_session_data, acquire_lock, get_random_template, check_rate_limit
+    get_session_data, acquire_lock, get_random_template, check_rate_limit,
+    redis_client
 )
 from .echob_client import echob_client
 from .database import get_db, SessionLocal
@@ -36,6 +37,10 @@ async def root():
 class SimulationRequest(BaseModel):
     phone: str
     token: str
+
+class VerifyRequest(BaseModel):
+    token: str
+    otp: str
 
 @app.post("/v1/simulate/user-send-message")
 async def simulate_user_send_message(request: SimulationRequest, background_tasks: BackgroundTasks):
@@ -143,8 +148,17 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
 
     # 5. Prepare Material
     otp = await generate_otp()
+    
+    # Save OTP for verification (Web Demo support)
+    await redis_client.setex(f"otp:{token}", 300, otp)
+    
     # Magic Link: https://[HOST_URL]/jump?t={token}&o={otp}
-    link = f"{settings.HOST_URL}/jump?t={token}&o={otp}"
+    # Ensure HOST_URL starts with http:// or https:// for WhatsApp clickability
+    host_url = settings.HOST_URL
+    if not host_url.startswith("http"):
+        host_url = f"http://{host_url}"
+        
+    link = f"{host_url}/jump?t={token}&o={otp}"
     
     # Get Tenant Name (We need to query DB or cache it. For MVP, query DB or use placeholder if not critical)
     app_name = "EchoID App" 
@@ -234,6 +248,21 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     deep_link = f"https://wa.me/{target_phone}?text={token}" 
     
     return InitResponse(deep_link=deep_link)
+
+@app.post("/v1/verify")
+async def verify_otp(request: VerifyRequest):
+    """
+    Verify OTP for Web Demo (or App Manual Entry).
+    """
+    stored_otp = await redis_client.get(f"otp:{request.token}")
+    if not stored_otp:
+        # For security, we might want to return generic error, but for demo specific is fine
+        raise HTTPException(status_code=400, detail="Invalid or expired session")
+    
+    if stored_otp != request.otp:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+    return {"status": "verified"}
 
 @app.get("/jump")
 async def jump_link(t: str, o: str):
