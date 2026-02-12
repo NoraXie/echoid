@@ -2,6 +2,7 @@ import asyncio
 import re
 import logging
 import time
+import json
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -28,6 +29,12 @@ from .database import get_db, SessionLocal
 from .models import Tenant, Log
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION)
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info(f"Server starting up...")
+    logger.info(f"Config HOST_URL: {settings.HOST_URL}")
+    logger.info(f"Config ECHOB_API_URL: {settings.ECHOB_API_URL}")
 
 @app.get("/")
 async def root():
@@ -137,13 +144,16 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
         return {"status": "ignored", "msg": "session_not_found"}
         
     tenant_id = session_data.get("tenant_id")
-    # phone = session_data.get("phone") # Original phone from init
     
-    logger.info(f"Processing for Tenant: {tenant_id}, Token: {token}")
+    # Update Session with Verified WA ID
+    session_data["wa_id"] = sender
+    await redis_client.setex(f"session:{token}", 600, json.dumps(session_data))
+    
+    logger.info(f"Processing for Tenant: {tenant_id}, Token: {token}, WA_ID: {sender}")
 
     # 4. Humanize
     await echob_client.start_typing("default", sender)
-    await asyncio.sleep(2.5) # Simulate AI thinking
+    await asyncio.sleep(2.5) # Simulate Human behavior (typing delay)
     await echob_client.stop_typing("default", sender)
 
     # 5. Prepare Material
@@ -262,7 +272,11 @@ async def verify_otp(request: VerifyRequest):
     if stored_otp != request.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
         
-    return {"status": "verified"}
+    # Retrieve WA ID from session if available
+    session_data = await get_session_data(request.token)
+    wa_id = session_data.get("wa_id") if session_data else None
+
+    return {"status": "verified", "wa_id": wa_id}
 
 @app.get("/jump")
 async def jump_link(t: str, o: str):

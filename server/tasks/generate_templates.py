@@ -26,13 +26,15 @@ TARGET_COUNT = 20
 
 # --- Prompt Engineering Section ---
 # This system prompt controls the persona and output format of the LLM.
-# Adjust this to change the style, language, or constraints of the generated templates.
-PROMPT_SYSTEM = """You are a Mexican cybersecurity assistant. Generate a unique, short WhatsApp verification message in Spanish (MX).
-Rules:
-1. You MUST include these exact placeholders: {app_name}, {otp}, {link}. Do NOT fill them.
-2. Vary the tone: Formal, Casual, Urgent, or Friendly.
-3. Use local slang occasionally (e.g., 'Chécalo', 'Oye').
-4. Output ONLY the raw text. Do not include quotes or explanations."""
+# Load from external markdown file for easier editing.
+try:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    prompt_path = os.path.join(current_dir, "copywriter_prompts.md")
+    with open(prompt_path, "r", encoding="utf-8") as f:
+        PROMPT_SYSTEM = f.read()
+except Exception as e:
+    print(f"Error loading prompt file: {e}")
+    sys.exit(1)
 
 async def save_to_db(content: str):
     """Save template to PostgreSQL asynchronously (simulated via sync session in thread)."""
@@ -57,7 +59,7 @@ def save_to_db_sync(content: str):
     finally:
         db.close()
 
-async def generate_single_template(client: httpx.AsyncClient):
+async def generate_single_template(client: httpx.AsyncClient, index: int):
     # Mock Mode Support
     if settings.NVIDIA_API_KEY.startswith("mock-"):
         import random
@@ -70,6 +72,9 @@ async def generate_single_template(client: httpx.AsyncClient):
         ]
         return random.choice(templates)
 
+    # User Instruction with Random Seed Injection
+    user_instruction = f"Generate variation #{index}. Make this one {'very short' if index%2==0 else 'friendly'}. Use {'Mexican' if index%3==0 else 'Colombian'} slang."
+
     try:
         response = await client.post(
             f"{settings.NVIDIA_BASE_URL}/chat/completions",
@@ -78,10 +83,14 @@ async def generate_single_template(client: httpx.AsyncClient):
                 "Content-Type": "application/json"
             },
             json={
-                "model": settings.NVIDIA_MODEL,
-                "messages": [{"role": "system", "content": PROMPT_SYSTEM}],
-                "temperature": 0.9, # High creativity
-                "max_tokens": 100
+                "model": "meta/llama3-70b-instruct", # Optimized for Llama 3 70B
+                "messages": [
+                    {"role": "system", "content": PROMPT_SYSTEM},
+                    {"role": "user", "content": user_instruction}
+                ],
+                "temperature": 0.95, # 🔥 High temperature = High randomness
+                "top_p": 0.9,
+                "max_tokens": 60
             },
             timeout=10.0
         )
@@ -127,7 +136,7 @@ async def main():
         while generated < TARGET_COUNT and attempts < TARGET_COUNT * 2:
             attempts += 1
             # Generate Template
-            text = await generate_single_template(client)
+            text = await generate_single_template(client, attempts)
             
             # Validate Format
             if validate_template(text):

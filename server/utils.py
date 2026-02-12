@@ -8,7 +8,7 @@ from .config import settings
 redis_client = redis.from_url(settings.REDIS_URL, encoding="utf-8", decode_responses=True)
 
 async def generate_token(length=16):
-    return "LOGIN-" + ''.join(random.choices(string.digits, k=5)) # PRD format: LOGIN-82910
+    return "LOGIN-" + ''.join(random.choices(string.digits, k=6)) # PRD format: LOGIN-829101 (6 digits for lower collision)
 
 async def generate_otp(length=4):
     return ''.join(random.choices(string.digits, k=length))

@@ -11,7 +11,7 @@ class EchobClient:
         }
 
     async def send_text(self, session: str, chat_id: str, text: str):
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             url = f"{self.base_url}/api/sendText"
             payload = {
                 "session": session,
