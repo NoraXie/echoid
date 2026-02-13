@@ -257,11 +257,11 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     await save_verification_session(token, request.phone, tenant.id)
     
     # 4. Build Deep Link
-    # PRD example: "https://wa.me/52155...?text=LOGIN-82910"
+    # PRD example: "https://wa.me/52155...?text=Hola, mi código es LOGIN-82910"
     # Target is the BOT NUMBER (configured in settings)
     target_phone = settings.BOT_PHONE_NUMBER
         
-    deep_link = f"https://wa.me/{target_phone}?text={token}" 
+    deep_link = f"https://wa.me/{target_phone}?text=Hola, mi código de verificación es {token}" 
     
     return InitResponse(deep_link=deep_link)
 

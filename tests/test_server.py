@@ -84,10 +84,15 @@ class TestEchoIDFlow(unittest.TestCase):
         deep_link = data["deep_link"]
         print(f"\n[1] Init Success. Deep Link: {deep_link}")
         
-        # Extract token from deep link: https://wa.me/521...?text=LOGIN-XXXXX or text=TOKEN
+        # Extract token from deep link: https://wa.me/521...?text=Hola...TOKEN...
         import re
         # Updated to match new secure token format (6-10 chars, alphanumeric)
-        token_match = re.search(r"text=([A-HJ-KMNP-Z2-9]{6,10})", deep_link)
+        # Look for token at the end or within the text parameter
+        token_match = re.search(r"([A-HJ-KMNP-Z2-9]{6,10})$", deep_link)
+        if not token_match:
+             # Try searching anywhere in string if not at end
+             token_match = re.search(r"([A-HJ-KMNP-Z2-9]{6,10})", deep_link)
+             
         self.assertTrue(token_match, f"Deep link {deep_link} does not contain valid token")
         token = token_match.group(1)
         print(f"    Token: {token}")
@@ -185,4 +190,7 @@ class TestEchoIDFlow(unittest.TestCase):
         print("\n[4] Rate Limit Enforced (429 Too Many Requests)")
 
 if __name__ == '__main__':
+    unittest.main()
+
+if __name__ == "__main__":
     unittest.main()

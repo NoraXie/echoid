@@ -19,4 +19,4 @@ STYLES:
 5. 👋 Greeting: "Qué onda {token}", "Hola {token}".
 6. 🤷 Minimalist: "Mira: {token}", "{token}".
 
-Limit: Under 8 words. Return ONLY raw text.
+Limit: Under 20 words. Return ONLY raw text.
