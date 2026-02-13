@@ -258,13 +258,8 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     
     # 4. Build Deep Link
     # PRD example: "https://wa.me/52155...?text=LOGIN-82910"
-    # Assuming request.phone is raw number. If we need country code logic, we'd add it here.
-    # For now, we trust the input or prepend '521' if it looks like a Mexican number (10 digits starting with 55?).
-    # Let's just use the phone as provided but ensure 521 prefix if it's MX target.
-    # To be safe and simple:
-    target_phone = request.phone
-    if not target_phone.startswith("52") and len(target_phone) == 10:
-        target_phone = "521" + target_phone
+    # Target is the BOT NUMBER (configured in settings)
+    target_phone = settings.BOT_PHONE_NUMBER
         
     deep_link = f"https://wa.me/{target_phone}?text={token}" 
     

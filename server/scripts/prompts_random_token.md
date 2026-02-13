@@ -6,6 +6,7 @@ MANDATORY:
 - The `{token}` is a random alphanumeric string (e.g., "9X28M5").
 
 🚫 CRITICAL CONSTRAINTS (NO TECHNICAL WORDS):
+- Language: Spanish (Latin America).
 - NO words like: "código", "clave", "token", "pin", "password", "verificación", "login".
 - NO explanations.
 - NO profanity/insults.

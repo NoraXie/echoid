@@ -9,6 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ["HOST_URL"] = "http://localhost:8000"
 os.environ["ECHOB_API_URL"] = "http://mock-echob"
 os.environ["ECHOB_API_KEY"] = "mock-key"
+os.environ["BOT_PHONE_NUMBER"] = "525670061324"
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
