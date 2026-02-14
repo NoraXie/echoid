@@ -6,7 +6,7 @@ import json
 import secrets
 import random
 from fastapi import FastAPI, Request, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
@@ -20,11 +20,11 @@ logging.basicConfig(
 logger = logging.getLogger("echoid")
 
 from .config import settings
-from .schemas import InitRequest, InitResponse
+from .schemas import InitRequest, InitResponse, VerifyRequest
 from .utils import (
     generate_token, generate_otp, save_verification_session, 
     get_session_data, acquire_lock, get_random_template, check_rate_limit,
-    redis_client
+    redis_client, validate_pkce
 )
 from .echob_client import echob_client
 from .database import get_db, SessionLocal
@@ -46,10 +46,6 @@ async def root():
 class SimulationRequest(BaseModel):
     phone: str
     token: str
-
-class VerifyRequest(BaseModel):
-    token: str
-    otp: str
 
 @app.post("/v1/simulate/user-send-message")
 async def simulate_user_send_message(request: SimulationRequest, background_tasks: BackgroundTasks):
@@ -127,24 +123,34 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     if not body or not sender or not msg_id:
         return {"status": "ignored"}
 
-    # 1. Idempotency Check
-    if not await acquire_lock(msg_id):
-        return {"status": "ok", "msg": "duplicate"}
-
-    # 2. Token Extraction
-    # Match Secure Token: 6-10 chars, Upper alphanumeric, no I,L,O,0,1
-    # Regex class: [A-HJ-KMNP-Z2-9]
+    # Optimization 1: CPU-based Token Extraction FIRST (Avoid Redis if no token)
     match = re.search(r"\b([A-HJ-KMNP-Z2-9]{6,10})\b", body, re.IGNORECASE)
     if not match:
         return {"status": "ignored", "msg": "no_token"}
-        
-    token = match.group(1).upper()
     
-    # 3. Retrieve Session & Tenant Info
+    token = match.group(1).upper()
+
+    # Optimization 2: Rate Limit (DoS Protection)
+    # Limit: 10 requests per minute per sender
+    if not await check_rate_limit(f"webhook:{sender}", limit=10, period=60):
+        logger.warning(f"Rate limit exceeded for sender: {sender}")
+        return {"status": "ignored", "msg": "rate_limit_exceeded"}
+
+    # 3. Idempotency Check
+    if not await acquire_lock(msg_id):
+        return {"status": "ok", "msg": "duplicate"}
+
+    # 4. Retrieve Session & Tenant Info
     session_data = await get_session_data(token)
     if not session_data:
         # Session expired or invalid
         return {"status": "ignored", "msg": "session_not_found"}
+
+    # Security: Session Hijack Prevention
+    # If session is already claimed by a WA ID, and it's NOT the current sender -> Attack attempt!
+    if session_data.get("wa_id") and session_data.get("wa_id") != sender:
+        logger.warning(f"Session Hijack Attempt! Token: {token}, Owner: {session_data.get('wa_id')}, Attacker: {sender}")
+        return {"status": "ignored", "msg": "token_already_claimed"}
         
     tenant_id = session_data.get("tenant_id")
     
@@ -254,7 +260,7 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     token = await generate_token() # LOGIN-XXXXX
     
     # 3. Cache
-    await save_verification_session(token, request.phone, tenant.id)
+    await save_verification_session(token, request.phone, tenant.id, request.code_challenge)
     
     # 4. Build Deep Link
     # PRD example: "https://wa.me/52155...?text=Hola, mi código es LOGIN-82910"
@@ -278,20 +284,34 @@ async def verify_otp(request: VerifyRequest):
     if stored_otp != request.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
         
+    # Security: Invalidate OTP immediately after use (Replay Attack Prevention)
+    await redis_client.delete(f"otp:{request.token}")
+
     # Retrieve WA ID from session if available
     session_data = await get_session_data(request.token)
+
+    # PKCE Validation
+    if session_data and session_data.get("code_challenge"):
+        challenge = session_data.get("code_challenge")
+        verifier = request.code_verifier
+        if not verifier:
+            raise HTTPException(status_code=400, detail="Missing code_verifier for secure session")
+        if not validate_pkce(verifier, challenge):
+            logger.warning(f"PKCE Validation Failed for Token {request.token}")
+            raise HTTPException(status_code=403, detail="PKCE Validation Failed")
+
     wa_id = session_data.get("wa_id") if session_data else None
 
     return {"status": "verified", "wa_id": wa_id}
 
-@app.get("/q/{slug}")
+@app.get("/q/{slug}", response_class=HTMLResponse)
 async def short_link_handler(slug: str):
     """
-    Anti-Ban Short Link Redirect
+    Anti-Ban Short Link Redirect with Open Graph Preview (Rich Link)
     """
     data_str = await redis_client.get(f"short:{slug}")
     if not data_str:
-        return JSONResponse({"error": "Link expired or invalid"}, status_code=404)
+        return HTMLResponse(content="<h1>Link Expired or Invalid</h1>", status_code=404)
     
     try:
         data = json.loads(data_str)
@@ -299,14 +319,55 @@ async def short_link_handler(slug: str):
         otp = data.get('otp')
         
         if not token or not otp:
-             return JSONResponse({"error": "Invalid link data"}, status_code=400)
+             return HTMLResponse(content="<h1>Invalid Link Data</h1>", status_code=400)
 
-        # 302 Redirect to Custom Scheme
-        # This happens in browser, safe from WhatsApp scanner
+        # Custom Scheme Target
         target = f"echoid://login?token={token}&otp={otp}"
-        return RedirectResponse(url=target, status_code=302)
+
+        # Feature Flag: Use HTML Preview or Direct Redirect
+        if settings.ENABLE_RICH_LINK_PREVIEW:
+            # HTML with Open Graph Meta Tags for WhatsApp Preview
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta property="og:title" content="Security Verification" />
+                <meta property="og:description" content="Tap to verify your login request securely." />
+                <meta property="og:image" content="https://via.placeholder.com/300x200.png?text=Secure+Login" />
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <title>Verifying...</title>
+                <script>
+                    window.location.href = "{target}";
+                    setTimeout(function() {{
+                        document.getElementById('manual-link').style.display = 'block';
+                    }}, 2000);
+                </script>
+                <style>
+                    body {{ font-family: sans-serif; text-align: center; padding: 20px; }}
+                    .btn {{ display: inline-block; padding: 10px 20px; background-color: #25D366; color: white; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
+                    #manual-link {{ display: none; }}
+                </style>
+            </head>
+            <body>
+                <h2>Verifying Identity...</h2>
+                <p>Please wait while we redirect you to the app.</p>
+                <div id="manual-link">
+                    <p>If you are not redirected automatically:</p>
+                    <a href="{target}" class="btn">Open App to Verify</a>
+                </div>
+            </body>
+            </html>
+            """
+            return HTMLResponse(content=html_content, status_code=200)
+        else:
+            # Fallback: 302 Redirect (Old Scheme)
+            # We do NOT delete the link here anymore, relying on verify_otp to delete the OTP for security.
+            return RedirectResponse(url=target, status_code=302)
+
+        # DO NOT DELETE immediately to allow Link Preview generation (Redis TTL handles expiration)
+        # await redis_client.delete(f"short:{slug}")
     except Exception:
-        return JSONResponse({"error": "Server error"}, status_code=500)
+        return HTMLResponse(content="<h1>Server Error</h1>", status_code=500)
 
 @app.get("/jump")
 async def jump_link(t: str, o: str):

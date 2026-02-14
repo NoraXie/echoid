@@ -45,16 +45,35 @@ async def generate_token(length=None):
 async def generate_otp(length=4):
     return ''.join(random.choices(string.digits, k=length))
 
-async def save_verification_session(token: str, phone: str, tenant_id: int = None):
+import hashlib
+import base64
+
+# ... existing imports ...
+
+def validate_pkce(verifier: str, challenge: str) -> bool:
+    """
+    Validate PKCE Code Verifier against Challenge (S256)
+    """
+    if not verifier or not challenge:
+        return False
+    # SHA256(verifier) -> Base64URL-encoded
+    sha256 = hashlib.sha256(verifier.encode('utf-8')).digest()
+    # Python's urlsafe_b64encode adds padding '=', standard PKCE usually strips it
+    computed_challenge = base64.urlsafe_b64encode(sha256).decode('utf-8').rstrip('=')
+    return computed_challenge == challenge
+
+async def save_verification_session(token: str, phone: str, tenant_id: int = None, code_challenge: str = None):
     # PRD v5.0: Redis.setex("session:LOGIN-82910", 600, phone_number)
     # Update: Store JSON to include tenant_id for billing
     key = f"session:{token}"
+    data = {"phone": phone}
     if tenant_id is not None:
-        data = {"phone": phone, "tenant_id": tenant_id}
-        await redis_client.setex(key, 600, json.dumps(data))
-    else:
-        # Backward compatibility or simple string if no tenant_id provided (should generally be avoided in v5)
-        await redis_client.setex(key, 600, phone)
+        data["tenant_id"] = tenant_id
+    if code_challenge:
+        data["code_challenge"] = code_challenge
+        
+    await redis_client.setex(key, 600, json.dumps(data))
+
 
 async def get_session_data(token: str):
     key = f"session:{token}"
