@@ -131,8 +131,8 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     token = match.group(1).upper()
 
     # Optimization 2: Rate Limit (DoS Protection)
-    # Limit: 10 requests per minute per sender
-    if not await check_rate_limit(f"webhook:{sender}", limit=10, period=60):
+    # Limit: Requests per period (configurable)
+    if not await check_rate_limit(f"webhook:{sender}", limit=settings.RATE_LIMIT_WEBHOOK, period=settings.RATE_LIMIT_WEBHOOK_PERIOD):
         logger.warning(f"Rate limit exceeded for sender: {sender}")
         return {"status": "ignored", "msg": "rate_limit_exceeded"}
 
@@ -151,12 +151,23 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     if session_data.get("wa_id") and session_data.get("wa_id") != sender:
         logger.warning(f"Session Hijack Attempt! Token: {token}, Owner: {session_data.get('wa_id')}, Attacker: {sender}")
         return {"status": "ignored", "msg": "token_already_claimed"}
-        
+    
+    # Security: Phone Number Mismatch Prevention (User A initiates, User B sends message)
+    # The session must belong to the sender.
+    expected_phone = session_data.get("phone")
+    # Normalize: Remove @s.whatsapp.net for comparison if needed
+    sender_clean = sender.split("@")[0]
+    expected_clean = expected_phone.split("@")[0]
+    
+    if expected_clean != sender_clean:
+         logger.warning(f"Phone Mismatch! Token: {token}, Expected: {expected_clean}, Sender: {sender_clean}")
+         return {"status": "ignored", "msg": "phone_mismatch"}
+
     tenant_id = session_data.get("tenant_id")
     
     # Update Session with Verified WA ID
     session_data["wa_id"] = sender
-    await redis_client.setex(f"session:{token}", 600, json.dumps(session_data))
+    await redis_client.setex(f"session:{token}", settings.SESSION_TTL, json.dumps(session_data))
     
     logger.info(f"Processing for Tenant: {tenant_id}, Token: {token}, WA_ID: {sender}")
 
@@ -169,11 +180,11 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     otp = await generate_otp()
     
     # Save OTP for verification (Web Demo support)
-    await redis_client.setex(f"otp:{token}", 300, otp)
+    await redis_client.setex(f"otp:{token}", settings.OTP_TTL, otp)
     
     # Anti-Ban Strategy: Slug Short Link
     slug = secrets.token_urlsafe(6) # e.g. "Hu7_9A"
-    await redis_client.setex(f"short:{slug}", 300, json.dumps({"token": token, "otp": otp}))
+    await redis_client.setex(f"short:{slug}", settings.SHORT_LINK_TTL, json.dumps({"token": token, "otp": otp}))
     
     # Domain Rotation
     base_url = settings.HOST_URL
@@ -244,8 +255,8 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     PRD v5.0 Section 3.2.A: SDK Init Interface
     """
     # 0. Risk Control (Rate Limit)
-    # Limit: 5 requests per 60 seconds per phone
-    if not await check_rate_limit(f"init:{request.phone}", limit=5, period=60):
+    # Limit: Requests per period (configurable)
+    if not await check_rate_limit(f"init:{request.phone}", limit=settings.RATE_LIMIT_INIT, period=settings.RATE_LIMIT_INIT_PERIOD):
         raise HTTPException(status_code=429, detail="Too many requests")
 
     # 1. Auth & Balance Check
@@ -327,13 +338,23 @@ async def short_link_handler(slug: str):
         # Feature Flag: Use HTML Preview or Direct Redirect
         if settings.ENABLE_RICH_LINK_PREVIEW:
             # HTML with Open Graph Meta Tags for WhatsApp Preview
+            # Ensure og:image is an absolute URL
+            image_url = "https://via.placeholder.com/300x200.png?text=Secure+Login"
+            if not image_url.startswith("http"):
+                image_url = f"{settings.HOST_URL.rstrip('/')}/{image_url.lstrip('/')}"
+            
+            # Canonical URL for og:url
+            canonical_url = f"{settings.HOST_URL.rstrip('/')}/q/{slug}"
+
             html_content = f"""
             <!DOCTYPE html>
-            <html>
+            <html prefix="og: http://ogp.me/ns#">
             <head>
                 <meta property="og:title" content="Security Verification" />
                 <meta property="og:description" content="Tap to verify your login request securely." />
-                <meta property="og:image" content="https://via.placeholder.com/300x200.png?text=Secure+Login" />
+                <meta property="og:image" content="{image_url}" />
+                <meta property="og:url" content="{canonical_url}" />
+                <meta property="og:type" content="website" />
                 <meta name="viewport" content="width=device-width, initial-scale=1">
                 <title>Verifying...</title>
                 <script>

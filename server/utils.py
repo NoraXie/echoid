@@ -63,7 +63,7 @@ def validate_pkce(verifier: str, challenge: str) -> bool:
     return computed_challenge == challenge
 
 async def save_verification_session(token: str, phone: str, tenant_id: int = None, code_challenge: str = None):
-    # PRD v5.0: Redis.setex("session:LOGIN-82910", 600, phone_number)
+    # PRD v5.0: Redis.setex("session:LOGIN-82910", SESSION_TTL, phone_number)
     # Update: Store JSON to include tenant_id for billing
     key = f"session:{token}"
     data = {"phone": phone}
@@ -72,7 +72,7 @@ async def save_verification_session(token: str, phone: str, tenant_id: int = Non
     if code_challenge:
         data["code_challenge"] = code_challenge
         
-    await redis_client.setex(key, 600, json.dumps(data))
+    await redis_client.setex(key, settings.SESSION_TTL, json.dumps(data))
 
 
 async def get_session_data(token: str):

@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field("postgresql://user:password@localhost:5432/echoid", description="数据库连接串")
     REDIS_URL: str = Field("redis://localhost:6379/0", description="Redis 连接串")
 
+    # Time-To-Live (TTL) & Limits Configuration
+    SESSION_TTL: int = Field(600, description="Session validity in seconds (default: 10 mins)")
+    OTP_TTL: int = Field(300, description="OTP validity in seconds (default: 5 mins)")
+    SHORT_LINK_TTL: int = Field(300, description="Short link validity in seconds (default: 5 mins)")
+    
+    # Rate Limits
+    RATE_LIMIT_INIT: int = Field(5, description="Max init requests per period")
+    RATE_LIMIT_INIT_PERIOD: int = Field(60, description="Init rate limit period in seconds")
+    RATE_LIMIT_WEBHOOK: int = Field(10, description="Max webhook requests per period")
+    RATE_LIMIT_WEBHOOK_PERIOD: int = Field(60, description="Webhook rate limit period in seconds")
+
+
     model_config = SettingsConfigDict(
         env_file=".env",
         case_sensitive=True,

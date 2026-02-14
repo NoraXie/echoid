@@ -112,7 +112,7 @@ class TestEchoIDFlow(unittest.TestCase):
         webhook_payload = {
             "event": "message",
             "payload": {
-                "from": "521555555555@s.whatsapp.net",
+                "from": f"{phone}@s.whatsapp.net", # Must match phone used in Init
                 "body": f"Please verify me {token}", 
                 "id": "MSG_ID_123"
             }
@@ -298,17 +298,19 @@ class TestEchoIDFlow(unittest.TestCase):
         
         print("\n[6] Testing Session Hijack Prevention")
         token = "ABCDEF2345"
+        user_a_phone = "521555555555" # The session owner
+        attacker_phone = "521999999999" # The hijacker
         
-        # 1. Initial State: Session exists, no wa_id (unclaimed)
+        # 1. Initial State: Session exists for User A
         from server.utils import redis_client
         redis_client.get.side_effect = None # Reset side effect from previous test
-        redis_client.get.return_value = json.dumps({"phone": "521234567890", "tenant_id": 1})
+        redis_client.get.return_value = json.dumps({"phone": user_a_phone, "tenant_id": 1})
         
-        # User A sends message -> Claims session
+        # User A sends message -> Claims session (Successful)
         webhook_payload_A = {
             "event": "message",
             "payload": {
-                "from": "USER_A_ID",
+                "from": user_a_phone, # Matches session
                 "body": f"Verify {token}", 
                 "id": "MSG_A"
             }
@@ -316,26 +318,30 @@ class TestEchoIDFlow(unittest.TestCase):
         res_A = self.client.post("/webhook/echob", json=webhook_payload_A)
         self.assertEqual(res_A.json()["status"], "ok")
         
-        # 2. Attack State: Session now has wa_id = USER_A_ID
+        # 2. Attack State: Session now has wa_id = user_a_phone
         redis_client.get.return_value = json.dumps({
-            "phone": "521234567890", 
+            "phone": user_a_phone, 
             "tenant_id": 1,
-            "wa_id": "USER_A_ID" # Claimed by A
+            "wa_id": user_a_phone # Claimed by A
         })
         
-        # User B tries to use same token
+        # User B tries to use same token (Hijack Attempt)
         webhook_payload_B = {
             "event": "message",
             "payload": {
-                "from": "USER_B_ID",
+                "from": attacker_phone,
                 "body": f"Verify {token}", 
                 "id": "MSG_B"
             }
         }
         res_B = self.client.post("/webhook/echob", json=webhook_payload_B)
         
-        # Should be ignored due to hijack attempt
+        # Should be ignored due to Hijack Attempt
         self.assertEqual(res_B.json()["status"], "ignored")
+        # In main.py:
+        # Hijack Check is FIRST: if session.wa_id and session.wa_id != sender -> token_already_claimed
+        # Phone Check is SECOND: if expected_phone != sender -> phone_mismatch
+        # Since session.wa_id IS set (User A claimed it), it will hit "token_already_claimed" first.
         self.assertEqual(res_B.json().get("msg"), "token_already_claimed")
         print("    ✅ Hijack Attempt Blocked")
 
@@ -395,6 +401,39 @@ class TestEchoIDFlow(unittest.TestCase):
         finally:
             # Restore original value
             settings.ENABLE_RICH_LINK_PREVIEW = original_value
+
+    @patch('server.main.echob_client')
+    def test_phone_mismatch_protection(self, mock_echob):
+        print("\n[9] Testing Phone Number Mismatch Protection")
+        from server.utils import redis_client
+        
+        # 1. Init Session for User A
+        token = "ABCDEF"
+        user_a_phone = "521555555555" # The intended user
+        attacker_phone = "521999999999" # The interceptor
+        
+        # Mock Redis returning session for User A
+        redis_client.get.return_value = json.dumps({
+            "phone": user_a_phone, 
+            "tenant_id": 1
+        })
+        
+        # 2. Attacker sends the token
+        payload = {
+            "event": "message",
+            "payload": {
+                "from": attacker_phone,
+                "body": f"Verify {token}", 
+                "id": "MSG_ATTACK"
+            }
+        }
+        
+        res = self.client.post("/webhook/echob", json=payload)
+        
+        # Should be ignored because sender != session.phone
+        self.assertEqual(res.json()["status"], "ignored")
+        self.assertEqual(res.json().get("msg"), "phone_mismatch")
+        print("    ✅ Phone Mismatch Blocked (Attacker cannot trigger OTP)")
 
 if __name__ == '__main__':
     unittest.main()
