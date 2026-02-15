@@ -490,6 +490,95 @@ class TestEchoIDFlow(unittest.TestCase):
             # Restore original value
             settings.ENABLE_RICH_LINK_PREVIEW = original_value
 
+    def test_short_link_html_content(self):
+        print("\n[8b] Testing Short Link HTML Content (Rich Preview & Cross-Platform)")
+        from server.config import settings
+        from server.utils import redis_client
+        
+        # Enable Rich Link Preview
+        original_value = settings.ENABLE_RICH_LINK_PREVIEW
+        settings.ENABLE_RICH_LINK_PREVIEW = True
+        
+        # Set Android Package Name
+        original_package = settings.ANDROID_PACKAGE_NAME
+        settings.ANDROID_PACKAGE_NAME = "com.test.app"
+        
+        try:
+            # Mock Redis
+            redis_client.get.side_effect = None
+            redis_client.get.return_value = json.dumps({"token": "TOK123", "otp": "OTP123"})
+            
+            slug = "TESTSLUG"
+            response = self.client.get(f"/q/{slug}")
+            
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("text/html", response.headers["content-type"])
+            
+            content = response.text
+            # Check for Intent URL (Android)
+            self.assertIn("intent://login", content)
+            self.assertIn("package=com.test.app", content)
+            # Check for Fallback URL (iOS/Web)
+            self.assertIn("echoid://login", content)
+            
+            # Check for JS Logic
+            self.assertIn("var isAndroid", content)
+            self.assertIn("var isIOS", content)
+            self.assertIn("launchApp()", content)
+            self.assertIn("desktop-msg", content)
+            
+            print("    ✅ HTML Content Generated Correctly with Cross-Platform Logic")
+            
+        finally:
+            settings.ENABLE_RICH_LINK_PREVIEW = original_value
+            settings.ANDROID_PACKAGE_NAME = original_package
+
+    def test_short_link_html_content_dynamic_package(self):
+        print("\n[8c] Testing Short Link HTML Content (Dynamic Package Name)")
+        from server.config import settings
+        from server.utils import redis_client
+        
+        # Enable Rich Link Preview
+        original_value = settings.ENABLE_RICH_LINK_PREVIEW
+        settings.ENABLE_RICH_LINK_PREVIEW = True
+        
+        # Set Global Package Name (Should be overridden by session)
+        original_global_package = settings.ANDROID_PACKAGE_NAME
+        settings.ANDROID_PACKAGE_NAME = "com.global.fallback"
+        
+        try:
+            # Mock Redis
+            async def mock_redis_get_dynamic(key):
+                if key.startswith("short:"):
+                    return json.dumps({"token": "TOK_DYN", "otp": "OTP_DYN"})
+                if key.startswith("session:"):
+                    return json.dumps({
+                        "phone": "521234567890", 
+                        "tenant_id": 1,
+                        "package_name": "com.dynamic.app" # <--- Dynamic Package
+                    })
+                return None
+            
+            redis_client.get.side_effect = mock_redis_get_dynamic
+            
+            slug = "TESTSLUG_DYN"
+            response = self.client.get(f"/q/{slug}")
+            
+            self.assertEqual(response.status_code, 200)
+            content = response.text
+            
+            # Verify Dynamic Package Name is used
+            self.assertIn("package=com.dynamic.app", content)
+            # Verify Global Package Name is NOT used
+            self.assertNotIn("package=com.global.fallback", content)
+            
+            print("    ✅ Dynamic Package Name from Session Used Correctly")
+            
+        finally:
+            settings.ENABLE_RICH_LINK_PREVIEW = original_value
+            settings.ANDROID_PACKAGE_NAME = original_global_package
+            redis_client.get.side_effect = None # Reset side effect
+
     @patch('server.main.echob_client')
     def test_phone_mismatch_protection(self, mock_echob):
         print("\n[9] Testing Phone Number Mismatch Protection")

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # Anti-Ban Link Strategy
     LINK_DOMAINS: str = Field("", description="Comma separated list of domains for link rotation (e.g. https://d1.com,https://d2.com)")
     ENABLE_RICH_LINK_PREVIEW: bool = Field(True, description="Enable HTML Open Graph preview for short links. If False, use 302 redirect.")
+    ANDROID_PACKAGE_NAME: str = Field("", description="Android Package Name for Intent URL (e.g. com.example.app)")
 
     # AI / Offline Factory Configuration
     # Optional: Only required for running offline template generation scripts

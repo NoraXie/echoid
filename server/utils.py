@@ -62,7 +62,7 @@ def validate_pkce(verifier: str, challenge: str) -> bool:
     computed_challenge = base64.urlsafe_b64encode(sha256).decode('utf-8').rstrip('=')
     return computed_challenge == challenge
 
-async def save_verification_session(token: str, phone: str, tenant_id: int = None, code_challenge: str = None, app_name: str = None):
+async def save_verification_session(token: str, phone: str, tenant_id: int = None, code_challenge: str = None, app_name: str = None, package_name: str = None):
     # PRD v5.0: Redis.setex("session:LOGIN-82910", SESSION_TTL, phone_number)
     # Update: Store JSON to include tenant_id for billing
     key = f"session:{token}"
@@ -73,6 +73,8 @@ async def save_verification_session(token: str, phone: str, tenant_id: int = Non
         data["code_challenge"] = code_challenge
     if app_name:
         data["app_name"] = app_name
+    if package_name:
+        data["package_name"] = package_name
         
     await redis_client.setex(key, settings.SESSION_TTL, json.dumps(data))
 
