@@ -209,16 +209,26 @@ class TestEchoIDFlow(unittest.TestCase):
         # ==========================================
         # Test the /q/{slug} endpoint
         short_response = self.client.get(f"/q/{slug}", follow_redirects=False)
-        self.assertEqual(short_response.status_code, 200)
-        self.assertIn("text/html", short_response.headers["content-type"])
+        self.assertEqual(short_response.status_code, 302)
         
-        content = short_response.text
-        # Expect echoid://login?token={token}&otp={otp} in the HTML body/script
-        self.assertIn("echoid://login", content)
-        self.assertIn(token, content)
-        # Check for Open Graph tags
-        self.assertIn('property="og:title"', content)
-        print(f"[3] Short Link Returns HTML with OG Tags")
+        location = short_response.headers["location"]
+        # Expect echoid://login?token={token}&otp={otp} in Location header (Default fallback)
+        self.assertIn("echoid://login", location)
+        self.assertIn(token, location)
+        print(f"[3] Short Link Redirects to App (302 Found)")
+        
+        # Test Android Redirect Logic
+        # Mock User-Agent as Android
+        headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G960F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.181 Mobile Safari/537.36"}
+        android_response = self.client.get(f"/q/{slug}", headers=headers, follow_redirects=False)
+        self.assertEqual(android_response.status_code, 302)
+        
+        android_location = android_response.headers["location"]
+        # Expect intent://... in Location header for Android
+        self.assertIn("intent://login", android_location)
+        self.assertIn("scheme=echoid", android_location)
+        self.assertIn("action=android.intent.action.VIEW", android_location)
+        print(f"    ✅ Android User-Agent Redirects to Intent Scheme")
         
         # Verify OTP Deletion logic (simulated by checking if delete was called during verification flow?)
         # Actually we haven't called verify yet in this test case flow?
@@ -464,40 +474,10 @@ class TestEchoIDFlow(unittest.TestCase):
         redis_client.incr.side_effect = None
         redis_client.incr.return_value = 1
 
-    def test_short_link_redirect_mode(self):
-        print("\n[8] Testing Short Link Redirect Mode (Fallback)")
-        from server.config import settings
-        
-        # Save original value
-        original_value = settings.ENABLE_RICH_LINK_PREVIEW
-        settings.ENABLE_RICH_LINK_PREVIEW = False
-        
-        try:
-            # Mock Redis
-            from server.utils import redis_client
-            # Note: side_effect might be set from previous tests, reset it
-            redis_client.get.side_effect = None
-            redis_client.get.return_value = json.dumps({"token": "TOK123", "otp": "OTP123"})
-            
-            slug = "TESTSLUG"
-            response = self.client.get(f"/q/{slug}", follow_redirects=False)
-            
-            self.assertEqual(response.status_code, 302)
-            self.assertIn("echoid://login", response.headers["location"])
-            print("    ✅ 302 Redirect Confirmed when Feature Flag is OFF")
-            
-        finally:
-            # Restore original value
-            settings.ENABLE_RICH_LINK_PREVIEW = original_value
-
-    def test_short_link_html_content(self):
-        print("\n[8b] Testing Short Link HTML Content (Rich Preview & Cross-Platform)")
+    def test_short_link_redirect_android(self):
+        print("\n[8b] Testing Short Link Redirect (Android)")
         from server.config import settings
         from server.utils import redis_client
-        
-        # Enable Rich Link Preview
-        original_value = settings.ENABLE_RICH_LINK_PREVIEW
-        settings.ENABLE_RICH_LINK_PREVIEW = True
         
         # Set Android Package Name
         original_package = settings.ANDROID_PACKAGE_NAME
@@ -509,38 +489,29 @@ class TestEchoIDFlow(unittest.TestCase):
             redis_client.get.return_value = json.dumps({"token": "TOK123", "otp": "OTP123"})
             
             slug = "TESTSLUG"
-            response = self.client.get(f"/q/{slug}")
             
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("text/html", response.headers["content-type"])
+            # Test Android User-Agent
+            headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G960F)"}
+            response = self.client.get(f"/q/{slug}", headers=headers, follow_redirects=False)
             
-            content = response.text
+            self.assertEqual(response.status_code, 302)
+            location = response.headers["location"]
+            
             # Check for Intent URL (Android)
-            self.assertIn("intent://login", content)
-            self.assertIn("package=com.test.app", content)
-            # Check for Fallback URL (iOS/Web)
-            self.assertIn("echoid://login", content)
+            self.assertIn("intent://login", location)
+            self.assertIn("package=com.test.app", location)
+            self.assertIn("scheme=echoid", location)
+            self.assertIn("action=android.intent.action.VIEW", location)
             
-            # Check for JS Logic
-            self.assertIn("var isAndroid", content)
-            self.assertIn("var isIOS", content)
-            self.assertIn("launchApp()", content)
-            self.assertIn("desktop-msg", content)
-            
-            print("    ✅ HTML Content Generated Correctly with Cross-Platform Logic")
+            print("    ✅ Android Redirects to Intent Scheme with Package Name")
             
         finally:
-            settings.ENABLE_RICH_LINK_PREVIEW = original_value
             settings.ANDROID_PACKAGE_NAME = original_package
 
-    def test_short_link_html_content_dynamic_package(self):
-        print("\n[8c] Testing Short Link HTML Content (Dynamic Package Name)")
+    def test_short_link_redirect_dynamic_package(self):
+        print("\n[8c] Testing Short Link Redirect (Dynamic Package Name)")
         from server.config import settings
         from server.utils import redis_client
-        
-        # Enable Rich Link Preview
-        original_value = settings.ENABLE_RICH_LINK_PREVIEW
-        settings.ENABLE_RICH_LINK_PREVIEW = True
         
         # Set Global Package Name (Should be overridden by session)
         original_global_package = settings.ANDROID_PACKAGE_NAME
@@ -562,20 +533,22 @@ class TestEchoIDFlow(unittest.TestCase):
             redis_client.get.side_effect = mock_redis_get_dynamic
             
             slug = "TESTSLUG_DYN"
-            response = self.client.get(f"/q/{slug}")
             
-            self.assertEqual(response.status_code, 200)
-            content = response.text
+            # Test Android User-Agent
+            headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 10; SM-G960F)"}
+            response = self.client.get(f"/q/{slug}", headers=headers, follow_redirects=False)
+            
+            self.assertEqual(response.status_code, 302)
+            location = response.headers["location"]
             
             # Verify Dynamic Package Name is used
-            self.assertIn("package=com.dynamic.app", content)
+            self.assertIn("package=com.dynamic.app", location)
             # Verify Global Package Name is NOT used
-            self.assertNotIn("package=com.global.fallback", content)
+            self.assertNotIn("package=com.global.fallback", location)
             
             print("    ✅ Dynamic Package Name from Session Used Correctly")
             
         finally:
-            settings.ENABLE_RICH_LINK_PREVIEW = original_value
             settings.ANDROID_PACKAGE_NAME = original_global_package
             redis_client.get.side_effect = None # Reset side effect
 

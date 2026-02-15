@@ -353,10 +353,10 @@ async def verify_otp(request: VerifyRequest):
 
     return {"status": "verified", "wa_id": wa_id}
 
-@app.get("/q/{slug}", response_class=HTMLResponse)
-async def short_link_handler(slug: str):
+@app.get("/q/{slug}")
+async def short_link_handler(request: Request, slug: str):
     """
-    Anti-Ban Short Link Redirect with Open Graph Preview (Rich Link)
+    Anti-Ban Short Link Redirect (302 Redirect)
     """
     data_str = await redis_client.get(f"short:{slug}")
     if not data_str:
@@ -387,101 +387,23 @@ async def short_link_handler(slug: str):
         # Format: intent://<host>/<path>?<query>#Intent;scheme=<scheme>;package=<package_name>;end;
         intent_url = None
         if package_name:
-            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;package={package_name};end;"
+            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;package={package_name};action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end;"
         else:
             # Fallback Intent without package name
-            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;end;"
+            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end;"
 
-        # Feature Flag: Use HTML Preview or Direct Redirect
-        if settings.ENABLE_RICH_LINK_PREVIEW:
-            # HTML with Open Graph Meta Tags for WhatsApp Preview
-            image_url = "https://via.placeholder.com/300x200.png?text=Secure+Login"
-            if not image_url.startswith("http"):
-                image_url = f"{settings.HOST_URL.rstrip('/')}/{image_url.lstrip('/')}"
+        # Determine Redirect Target based on User-Agent
+        user_agent = request.headers.get("user-agent", "").lower()
+        
+        # Default to Custom Scheme (iOS / Desktop / Fallback)
+        final_target = target
+        
+        # Android: Use Intent Scheme (Preferred for Chrome)
+        if "android" in user_agent and intent_url:
+            final_target = intent_url
             
-            canonical_url = f"{settings.HOST_URL.rstrip('/')}/q/{slug}"
-
-            # JS Logic: Handle Android (Intent), iOS (Custom Scheme), and Web/Desktop
-            html_content = f"""
-            <!DOCTYPE html>
-            <html prefix="og: http://ogp.me/ns#">
-            <head>
-                <meta property="og:title" content="Security Verification" />
-                <meta property="og:description" content="Tap to verify your login request securely." />
-                <meta property="og:image" content="{image_url}" />
-                <meta property="og:url" content="{canonical_url}" />
-                <meta property="og:type" content="website" />
-                <meta name="viewport" content="width=device-width, initial-scale=1">
-                <title>Verifying...</title>
-                <script>
-                    var schemeUrl = "{target}";
-                    var intentUrl = "{intent_url}";
-                    
-                    function launchApp() {{
-                        var userAgent = navigator.userAgent || navigator.vendor || window.opera;
-                        var isAndroid = /android/i.test(userAgent);
-                        var isIOS = /iPad|iPhone|iPod/.test(userAgent) && !window.MSStream;
-
-                        if (isAndroid) {{
-                            // Android: Use Intent Scheme
-                            window.location.href = intentUrl;
-                        }} else if (isIOS) {{
-                            // iOS: Use Custom Scheme
-                            // Safari may prompt the user.
-                            window.location.href = schemeUrl;
-                        }} else {{
-                            // Desktop / Web / Other
-                            // Try custom scheme anyway (some desktop apps might handle it)
-                            // But mainly rely on showing the manual button/msg
-                            window.location.href = schemeUrl;
-                        }}
-                    }}
-
-                    window.onload = function() {{
-                        launchApp();
-                        setTimeout(function() {{
-                            document.getElementById('manual-link').style.display = 'block';
-                            
-                            // Check if desktop to show specific message
-                            var userAgent = navigator.userAgent || navigator.vendor || window.opera;
-                            var isMobile = /android|iPad|iPhone|iPod/i.test(userAgent);
-                            if (!isMobile) {{
-                                document.getElementById('desktop-msg').style.display = 'block';
-                            }}
-                        }}, 1000);
-                    }};
-                </script>
-                <style>
-                    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; text-align: center; padding: 20px; background-color: #f0f2f5; }}
-                    .container {{ max-width: 400px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
-                    h2 {{ color: #333; margin-bottom: 10px; }}
-                    p {{ color: #666; margin-bottom: 20px; line-height: 1.5; }}
-                    .btn {{ display: inline-block; padding: 15px 30px; background-color: #25D366; color: white; text-decoration: none; border-radius: 25px; font-size: 16px; font-weight: bold; transition: background-color 0.3s; width: 100%; box-sizing: border-box; }}
-                    .btn:hover {{ background-color: #128C7E; }}
-                    #manual-link {{ display: none; margin-top: 20px; }}
-                    #desktop-msg {{ display: none; color: #888; font-size: 14px; margin-top: 15px; background: #fff3cd; padding: 10px; border-radius: 5px; border: 1px solid #ffeeba; color: #856404; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <h2>Verifying Identity...</h2>
-                    <p>We are redirecting you to the app to complete your login.</p>
-                    
-                    <div id="manual-link">
-                        <a href="#" onclick="launchApp(); return false;" class="btn">Open App</a>
-                    </div>
-
-                    <div id="desktop-msg">
-                        <p><strong>Note:</strong> This link is intended for the mobile app. If nothing happens, please open this link on your phone.</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            return HTMLResponse(content=html_content, status_code=200)
-        else:
-            # Fallback: 302 Redirect (Old Scheme)
-            return RedirectResponse(url=target, status_code=302)
+        # Return 302 Redirect (No HTML Preview)
+        return RedirectResponse(url=final_target, status_code=302)
 
         # DO NOT DELETE immediately to allow Link Preview generation (Redis TTL handles expiration)
         # await redis_client.delete(f"short:{slug}")
