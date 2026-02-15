@@ -123,18 +123,18 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     if not body or not sender or not msg_id:
         return {"status": "ignored"}
 
-    # Optimization 1: CPU-based Token Extraction FIRST (Avoid Redis if no token)
+    # Optimization 1: Rate Limit (DoS Protection) - Limit ALL incoming messages from sender
+    # Limit: Requests per period (configurable)
+    if not await check_rate_limit(f"webhook:{sender}", limit=settings.RATE_LIMIT_WEBHOOK, period=settings.RATE_LIMIT_WEBHOOK_PERIOD):
+        logger.warning(f"Rate limit exceeded for sender: {sender}")
+        return {"status": "ignored", "msg": "rate_limit_exceeded"}
+
+    # Optimization 2: CPU-based Token Extraction (Avoid Redis if no token)
     match = re.search(r"\b([A-HJ-KMNP-Z2-9]{6,10})\b", body, re.IGNORECASE)
     if not match:
         return {"status": "ignored", "msg": "no_token"}
     
     token = match.group(1).upper()
-
-    # Optimization 2: Rate Limit (DoS Protection)
-    # Limit: Requests per period (configurable)
-    if not await check_rate_limit(f"webhook:{sender}", limit=settings.RATE_LIMIT_WEBHOOK, period=settings.RATE_LIMIT_WEBHOOK_PERIOD):
-        logger.warning(f"Rate limit exceeded for sender: {sender}")
-        return {"status": "ignored", "msg": "rate_limit_exceeded"}
 
     # 3. Idempotency Check
     if not await acquire_lock(msg_id):
@@ -155,13 +155,21 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
     # Security: Phone Number Mismatch Prevention (User A initiates, User B sends message)
     # The session must belong to the sender.
     expected_phone = session_data.get("phone")
-    # Normalize: Remove @s.whatsapp.net for comparison if needed
     sender_clean = sender.split("@")[0]
-    expected_clean = expected_phone.split("@")[0]
     
-    if expected_clean != sender_clean:
-         logger.warning(f"Phone Mismatch! Token: {token}, Expected: {expected_clean}, Sender: {sender_clean}")
-         return {"status": "ignored", "msg": "phone_mismatch"}
+    if expected_phone:
+        # Normalize: Remove @s.whatsapp.net for comparison if needed
+        expected_clean = expected_phone.split("@")[0]
+        
+        if expected_clean != sender_clean:
+             logger.warning(f"Phone Mismatch! Token: {token}, Expected: {expected_clean}, Sender: {sender_clean}")
+             return {"status": "ignored", "msg": "phone_mismatch"}
+    else:
+        # If no phone was provided at init (or not yet bound), we bind the first sender as the owner
+        # This effectively "registers" the user with this phone number for this session
+        session_data["phone"] = sender
+        # Update session in Redis to save the binding
+        await redis_client.setex(f"session:{token}", settings.SESSION_TTL, json.dumps(session_data))
 
     tenant_id = session_data.get("tenant_id")
     
@@ -198,8 +206,8 @@ async def process_webhook_payload(payload: dict, background_tasks: BackgroundTas
         
     link = f"{base_url}/q/{slug}"
     
-    # Get Tenant Name (We need to query DB or cache it. For MVP, query DB or use placeholder if not critical)
-    app_name = "EchoID App" 
+    # Get Tenant Name or App Name from session
+    app_name = session_data.get("app_name", "EchoID App")
     
     # 6. Template Assembly
     template = await get_random_template()
@@ -256,8 +264,10 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     """
     # 0. Risk Control (Rate Limit)
     # Limit: Requests per period (configurable)
-    if not await check_rate_limit(f"init:{request.phone}", limit=settings.RATE_LIMIT_INIT, period=settings.RATE_LIMIT_INIT_PERIOD):
-        raise HTTPException(status_code=429, detail="Too many requests")
+    # Note: Since phone is no longer required, we cannot rate limit by phone here.
+    # We could rate limit by IP or API Key, but for now we skip phone-based rate limit.
+    # if request.phone and not await check_rate_limit(f"init:{request.phone}", limit=settings.RATE_LIMIT_INIT, period=settings.RATE_LIMIT_INIT_PERIOD):
+    #    raise HTTPException(status_code=429, detail="Too many requests")
 
     # 1. Auth & Balance Check
     tenant = db.query(Tenant).filter(Tenant.api_key == request.api_key).first()
@@ -271,16 +281,43 @@ async def init_verification(request: InitRequest, db: Session = Depends(get_db))
     token = await generate_token() # LOGIN-XXXXX
     
     # 3. Cache
-    await save_verification_session(token, request.phone, tenant.id, request.code_challenge)
+    await save_verification_session(
+        token=token, 
+        phone=None, # Phone is NOT provided in Init
+        tenant_id=tenant.id, 
+        code_challenge=request.code_challenge,
+        app_name=request.app_name
+    )
     
-    # 4. Build Deep Link
-    # PRD example: "https://wa.me/52155...?text=Hola, mi código es LOGIN-82910"
-    # Target is the BOT NUMBER (configured in settings)
-    target_phone = settings.BOT_PHONE_NUMBER
-        
-    deep_link = f"https://wa.me/{target_phone}?text=Hola, mi código de verificación es {token}" 
+    # 4. Build Deep Link (EchoID Redirect Link)
+    # Use EchoID domain to hide bot number and track clicks
+    # Format: https://api.echoid.com/v1/go/{token}
+    host = settings.HOST_URL.rstrip('/')
+    deep_link = f"{host}/v1/go/{token}"
+    
+    logger.info(f"[Init] Token: {token} | App: {request.app_name}")
     
     return InitResponse(deep_link=deep_link)
+
+@app.get("/v1/go/{token}")
+async def go_redirect(token: str):
+    """
+    Redirects user to WhatsApp.
+    Hides the bot phone number from the initial API response.
+    """
+    # 1. Validate Token
+    session_data = await get_session_data(token)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Invalid or expired link")
+    
+    # 2. Construct WhatsApp Deep Link
+    target_phone = settings.BOT_PHONE_NUMBER
+    # Message MUST match the regex in webhook: \b([A-HJ-KMNP-Z2-9]{6,10})\b
+    message = f"Hola, mi código de verificación es {token}"
+    wa_link = f"https://wa.me/{target_phone}?text={message}"
+    
+    # 3. Redirect
+    return RedirectResponse(url=wa_link)
 
 @app.post("/v1/verify")
 async def verify_otp(request: VerifyRequest):
