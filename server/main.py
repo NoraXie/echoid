@@ -42,34 +42,6 @@ async def startup_event():
 async def root():
     return {"message": "EchoID Server is running", "version": settings.VERSION}
 
-@app.get("/.well-known/assetlinks.json")
-async def assetlinks():
-    """
-    Serve Android App Links verification file.
-    Enables zero-click, browser-less app opening on Android 6.0+.
-    Supports multi-app/multi-tenant via ANDROID_ASSETLINKS_JSON config.
-    """
-    # 1. Priority: Raw JSON Config (for multiple apps/tenants)
-    if settings.ANDROID_ASSETLINKS_JSON:
-        try:
-            return json.loads(settings.ANDROID_ASSETLINKS_JSON)
-        except json.JSONDecodeError:
-            logger.error("Invalid JSON in ANDROID_ASSETLINKS_JSON config")
-            return JSONResponse(content=[], status_code=500)
-
-    # 2. Fallback: Single App Config
-    if not settings.ANDROID_PACKAGE_NAME or not settings.ANDROID_APP_FINGERPRINT:
-        return JSONResponse(content=[])
-        
-    return JSONResponse(content=[{
-        "relation": ["delegate_permission/common.handle_all_urls"],
-        "target": {
-            "namespace": "android_app",
-            "package_name": settings.ANDROID_PACKAGE_NAME,
-            "sha256_cert_fingerprints": [settings.ANDROID_APP_FINGERPRINT]
-        }
-    }])
-
 # --- Simulation Schema ---
 class SimulationRequest(BaseModel):
     phone: str
@@ -415,10 +387,10 @@ async def short_link_handler(request: Request, slug: str):
         # Format: intent://<host>/<path>?<query>#Intent;scheme=<scheme>;package=<package_name>;end;
         intent_url = None
         if package_name:
-            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;package={package_name};end;"
+            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;package={package_name};action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end;"
         else:
             # Fallback Intent without package name
-            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;end;"
+            intent_url = f"intent://login?token={token}&otp={otp}#Intent;scheme=echoid;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end;"
 
         # Determine Redirect Target based on User-Agent
         user_agent = request.headers.get("user-agent", "").lower()
