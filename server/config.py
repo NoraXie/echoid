@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Anti-Ban Link Strategy
     LINK_DOMAINS: str = Field("", description="Comma separated list of domains for link rotation (e.g. https://d1.com,https://d2.com)")
     ANDROID_PACKAGE_NAME: str = Field("", description="Android Package Name for Intent URL (e.g. com.example.app)")
+    ANDROID_APP_FINGERPRINT: str = Field("", description="SHA256 Fingerprint for App Links (e.g. FA:C6:17:45:...)")
+    ANDROID_ASSETLINKS_JSON: str = Field("", description="Raw JSON content for .well-known/assetlinks.json (Overrides single app config)")
 
     # AI / Offline Factory Configuration
     # Optional: Only required for running offline template generation scripts

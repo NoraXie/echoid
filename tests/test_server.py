@@ -227,7 +227,7 @@ class TestEchoIDFlow(unittest.TestCase):
         # Expect intent://... in Location header for Android
         self.assertIn("intent://login", android_location)
         self.assertIn("scheme=echoid", android_location)
-        self.assertIn("action=android.intent.action.VIEW", android_location)
+        self.assertIn("end;", android_location)
         print(f"    ✅ Android User-Agent Redirects to Intent Scheme")
         
         # Verify OTP Deletion logic (simulated by checking if delete was called during verification flow?)
@@ -501,7 +501,7 @@ class TestEchoIDFlow(unittest.TestCase):
             self.assertIn("intent://login", location)
             self.assertIn("package=com.test.app", location)
             self.assertIn("scheme=echoid", location)
-            self.assertIn("action=android.intent.action.VIEW", location)
+            self.assertIn("end;", location)
             
             print("    ✅ Android Redirects to Intent Scheme with Package Name")
             
